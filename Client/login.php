@@ -24,7 +24,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $loginError = 'Enter a valid email address and password.';
     } else {
         $statement = $pdo->prepare(
-            "SELECT TOP (1) u.user_id, u.password
+            "SELECT u.user_id, u.password
              FROM users u
              INNER JOIN clients c ON c.user_id = u.user_id
              WHERE LOWER(u.email) = LOWER(:email) AND LOWER(TRIM(u.role)) = 'client'

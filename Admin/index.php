@@ -10,7 +10,7 @@ if (!in_array($userRole, ['admin', 'lawyer'], true) || empty($_SESSION['admin_po
     exit;
 }
 
-$statement = $pdo->prepare('SELECT TOP (1) username, email, role FROM users WHERE user_id = :user_id');
+$statement = $pdo->prepare('SELECT username, email, role FROM users WHERE user_id = :user_id');
 $statement->execute(['user_id' => (int) $_SESSION['admin_portal_user_id']]);
 $account = $statement->fetch();
 
@@ -47,8 +47,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'confi
         $pdo->beginTransaction();
         $pendingCheck = $pdo->prepare(
             "SELECT appointment_id
-             FROM appointments WITH (UPDLOCK, ROWLOCK)
-             WHERE appointment_id = :appointment_id AND status = 'Pending'"
+             FROM appointments
+             WHERE appointment_id = :appointment_id AND status = 'Pending'
+             FOR UPDATE"
         );
         $pendingCheck->execute(['appointment_id' => $appointmentId]);
 
@@ -107,7 +108,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'creat
     ) {
         $timeEntryActionNotice = ['type' => 'error', 'message' => 'Enter a valid date that is not in the future.'];
     } else {
-        $caseCheck = $pdo->prepare('SELECT TOP (1) case_id FROM cases WHERE case_id = :case_id');
+        $caseCheck = $pdo->prepare('SELECT case_id FROM cases WHERE case_id = :case_id');
         $caseCheck->execute(['case_id' => $caseId]);
 
         if ($caseCheck->fetchColumn() === false) {
@@ -202,7 +203,7 @@ $timeEntriesStatement = $pdo->query(
 );
 $timeEntries = $timeEntriesStatement->fetchAll();
 $totalBillableHoursYtd = (float) $pdo->query(
-    'SELECT COALESCE(SUM(hours), 0) FROM time_entries WHERE YEAR(date_logged) = YEAR(GETDATE())'
+    'SELECT COALESCE(SUM(hours), 0) FROM time_entries WHERE YEAR(date_logged) = YEAR(CURRENT_DATE())'
 )->fetchColumn();
 $totalClients = (int) $pdo->query(
     'SELECT COUNT(*) FROM clients'

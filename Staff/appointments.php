@@ -32,12 +32,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     ) {
         $error = 'Choose a valid future date and time.';
     } else {
-        $clientCheck = $pdo->prepare('SELECT TOP (1) client_id FROM clients WHERE client_id = :client_id');
+        $clientCheck = $pdo->prepare('SELECT client_id FROM clients WHERE client_id = :client_id');
         $clientCheck->execute(['client_id' => $clientId]);
         if ($clientCheck->fetchColumn() === false) {
             $error = 'The selected client could not be found.';
         } elseif ($caseId !== null) {
-            $caseCheck = $pdo->prepare('SELECT TOP (1) client_id FROM cases WHERE case_id = :case_id');
+            $caseCheck = $pdo->prepare('SELECT client_id FROM cases WHERE case_id = :case_id');
             $caseCheck->execute(['case_id' => $caseId]);
             $caseClientId = $caseCheck->fetchColumn();
             if ($caseClientId === false || (int) $caseClientId !== $clientId) {

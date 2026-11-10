@@ -24,7 +24,7 @@ function staff_require_auth(PDO $pdo): array
         exit;
     }
 
-    $statement = $pdo->prepare('SELECT TOP (1) user_id, username, email, role FROM users WHERE user_id = :user_id');
+    $statement = $pdo->prepare('SELECT user_id, username, email, role FROM users WHERE user_id = :user_id');
     $statement->execute(['user_id' => $userId]);
     $user = $statement->fetch();
 

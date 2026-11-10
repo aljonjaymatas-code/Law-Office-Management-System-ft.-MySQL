@@ -56,7 +56,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $pdo->beginTransaction();
             $userStatement = $pdo->prepare(
                 'INSERT INTO users (username, email, password, role, phone, address)
-                 OUTPUT INSERTED.user_id
                  VALUES (:username, :email, :password, :role, :phone, :address)'
             );
             $userStatement->execute([
@@ -67,7 +66,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'phone' => $phoneValue !== '' ? $phoneValue : null,
                 'address' => $addressValue !== '' ? $addressValue : null,
             ]);
-            $userId = (int) $userStatement->fetchColumn();
+            $userId = (int) $pdo->lastInsertId();
 
             $clientStatement = $pdo->prepare(
                 'INSERT INTO clients (user_id, fullname, phone, email, address)

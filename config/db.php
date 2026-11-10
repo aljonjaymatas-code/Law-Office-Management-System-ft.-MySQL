@@ -27,43 +27,33 @@ if (is_file($envPath) && is_readable($envPath)) {
     }
 }
 
-$driver = getenv('DB_DRIVER') ?: 'sqlsrv';
-$server = getenv('DB_HOST') ?: 'localhost';
-$database = getenv('DB_NAME') ?: 'loms_v2';
-$authentication = strtolower(getenv('DB_AUTH') ?: 'windows');
-$trustServerCertificate = filter_var(
-    getenv('DB_TRUST_SERVER_CERTIFICATE') ?: 'false',
-    FILTER_VALIDATE_BOOLEAN
-);
+$driver = strtolower(getenv('DB_DRIVER') ?: 'mysql');
+$host = getenv('DB_HOST') ?: 'localhost';
+$port = getenv('DB_PORT') ?: '3306';
+$database = getenv('DB_NAME') ?: 'law_office_db';
+$username = getenv('DB_USERNAME') ?: 'root';
+$password = getenv('DB_PASSWORD');
 
-if ($driver !== 'sqlsrv') {
-    throw new RuntimeException('DB_DRIVER must be set to sqlsrv.');
+if ($driver !== 'mysql') {
+    throw new RuntimeException('DB_DRIVER must be set to mysql.');
 }
 if (
-    $server === ''
+    $host === ''
     || $database === ''
-    || preg_match('/[;\r\n]/', $server . $database) === 1
+    || preg_match('/[;\r\n]/', $host . $database) === 1
 ) {
-    throw new RuntimeException('DB_HOST and DB_NAME must contain valid SQL Server connection values.');
+    throw new RuntimeException('DB_HOST and DB_NAME must contain valid MySQL connection values.');
 }
-if (!in_array($authentication, ['windows', 'sql'], true)) {
-    throw new RuntimeException('DB_AUTH must be set to windows or sql.');
-}
-
-$dsn = "sqlsrv:Server=$server;Database=$database";
-if ($trustServerCertificate) {
-    $dsn .= ';TrustServerCertificate=1';
+if (!ctype_digit($port) || (int) $port < 1 || (int) $port > 65535) {
+    throw new RuntimeException('DB_PORT must be a valid TCP port.');
 }
 
-$username = null;
-$password = null;
-if ($authentication === 'sql') {
-    $username = getenv('DB_USERNAME');
-    $password = getenv('DB_PASSWORD');
-    if ($username === false || $username === '' || $password === false) {
-        throw new RuntimeException('DB_USERNAME and DB_PASSWORD are required for SQL Server authentication.');
-    }
+if ($username === '') {
+    throw new RuntimeException('DB_USERNAME must not be empty.');
 }
+
+$password = $password === false ? '' : $password;
+$dsn = "mysql:host=$host;port=$port;dbname=$database;charset=utf8mb4";
 
 try {
     $pdo = new PDO($dsn, $username, $password, [
@@ -72,7 +62,7 @@ try {
         PDO::ATTR_EMULATE_PREPARES => false,
     ]);
 } catch (PDOException $exception) {
-    error_log('SQL Server connection failed: ' . $exception->getMessage());
+    error_log('MySQL/MariaDB connection failed: ' . $exception->getMessage());
     http_response_code(500);
-    exit('Database connection failed. Check SQL Server availability, database access for the Apache Windows account, and the PDO_SQLSRV driver.');
+    exit('Database connection failed. Check that MySQL is running in XAMPP, the database credentials are correct, and the PDO_MYSQL driver is enabled.');
 }

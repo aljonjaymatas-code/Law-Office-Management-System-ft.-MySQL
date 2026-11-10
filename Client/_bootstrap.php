@@ -39,7 +39,7 @@ function client_current_user(PDO $pdo): ?array
     }
 
     $statement = $pdo->prepare(
-        "SELECT TOP (1) u.user_id, u.username, u.email, u.role, c.client_id, c.fullname,
+        "SELECT u.user_id, u.username, u.email, u.role, c.client_id, c.fullname,
                 COALESCE(NULLIF(u.phone, ''), c.phone) AS phone,
                 COALESCE(NULLIF(u.address, ''), c.address) AS address
          FROM users u

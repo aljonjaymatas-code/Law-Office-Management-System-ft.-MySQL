@@ -44,7 +44,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     } elseif ($description !== '' && strlen($description) > 65535) {
         $error = 'Case description is too long.';
     } else {
-        $duplicateCheck = $pdo->prepare('SELECT TOP (1) case_id FROM cases WHERE case_number = :case_number');
+        $duplicateCheck = $pdo->prepare('SELECT case_id FROM cases WHERE case_number = :case_number');
         $duplicateCheck->execute(['case_number' => $caseNumber]);
 
         if ($duplicateCheck->fetchColumn() !== false) {
@@ -54,11 +54,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $pdo->beginTransaction();
                 $clientLookup = $pdo->prepare(
                     "SELECT c.client_id
-                     FROM clients c WITH (UPDLOCK, ROWLOCK)
+                     FROM clients c
                      INNER JOIN users u ON u.user_id = c.user_id
                      WHERE LOWER(TRIM(u.role)) = 'client'
                        AND LOWER(TRIM(c.fullname)) = LOWER(TRIM(:fullname))
-                     "
+                     FOR UPDATE"
                 );
                 $clientLookup->execute(['fullname' => $clientName]);
                 $matchingClientIds = $clientLookup->fetchAll(PDO::FETCH_COLUMN);
@@ -72,7 +72,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     } else {
                         $clientInsert = $pdo->prepare(
                             'INSERT INTO clients (fullname, phone, email, address)
-                             OUTPUT INSERTED.client_id
                              VALUES (:fullname, :phone, :email, :address)'
                         );
                         $clientInsert->execute([
@@ -81,7 +80,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             'email' => $clientEmail !== '' ? $clientEmail : null,
                             'address' => $clientAddress !== '' ? $clientAddress : null,
                         ]);
-                        $clientId = (int) $clientInsert->fetchColumn();
+                        $clientId = (int) $pdo->lastInsertId();
                     }
 
                     $caseInsert = $pdo->prepare(

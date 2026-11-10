@@ -20,16 +20,17 @@ if (mb_strlen($query, 'UTF-8') > 100) {
 
     $searches = [
         'clients' => [
-            'sql' => "SELECT TOP (25) client_id, fullname, email, phone
+            'sql' => "SELECT client_id, fullname, email, phone
                       FROM clients
                       WHERE fullname LIKE ? ESCAPE '!'
                          OR email LIKE ? ESCAPE '!'
                          OR phone LIKE ? ESCAPE '!'
-                      ORDER BY fullname ASC",
+                      ORDER BY fullname ASC
+                      LIMIT 25",
             'parameters' => [$term, $term, $term],
         ],
         'cases' => [
-            'sql' => "SELECT TOP (25) c.case_id, c.case_number, c.title, c.status, c.filed_date,
+            'sql' => "SELECT c.case_id, c.case_number, c.title, c.status, c.filed_date,
                              cl.fullname AS client_name
                       FROM cases c
                       LEFT JOIN clients cl ON cl.client_id = c.client_id
@@ -38,11 +39,12 @@ if (mb_strlen($query, 'UTF-8') > 100) {
                          OR c.description LIKE ? ESCAPE '!'
                          OR c.status LIKE ? ESCAPE '!'
                          OR cl.fullname LIKE ? ESCAPE '!'
-                      ORDER BY c.filed_date DESC, c.case_id DESC",
+                      ORDER BY c.filed_date DESC, c.case_id DESC
+                      LIMIT 25",
             'parameters' => [$term, $term, $term, $term, $term],
         ],
         'appointments' => [
-            'sql' => "SELECT TOP (25) a.appointment_id, a.title, a.appointment_date, a.type, a.status,
+            'sql' => "SELECT a.appointment_id, a.title, a.appointment_date, a.type, a.status,
                              cl.fullname AS client_name, c.case_number
                       FROM appointments a
                       LEFT JOIN clients cl ON cl.client_id = a.client_id
@@ -52,11 +54,12 @@ if (mb_strlen($query, 'UTF-8') > 100) {
                          OR a.status LIKE ? ESCAPE '!'
                          OR cl.fullname LIKE ? ESCAPE '!'
                          OR c.case_number LIKE ? ESCAPE '!'
-                      ORDER BY a.appointment_date DESC, a.appointment_id DESC",
+                      ORDER BY a.appointment_date DESC, a.appointment_id DESC
+                      LIMIT 25",
             'parameters' => [$term, $term, $term, $term, $term],
         ],
         'documents' => [
-            'sql' => "SELECT TOP (25) d.document_id, d.document_name, d.upload_date,
+            'sql' => "SELECT d.document_id, d.document_name, d.upload_date,
                              c.case_number, c.title AS case_title, cl.fullname AS client_name
                       FROM documents d
                       INNER JOIN cases c ON c.case_id = d.case_id
@@ -65,7 +68,8 @@ if (mb_strlen($query, 'UTF-8') > 100) {
                          OR c.case_number LIKE ? ESCAPE '!'
                          OR c.title LIKE ? ESCAPE '!'
                          OR cl.fullname LIKE ? ESCAPE '!'
-                      ORDER BY d.upload_date DESC, d.document_id DESC",
+                      ORDER BY d.upload_date DESC, d.document_id DESC
+                      LIMIT 25",
             'parameters' => [$term, $term, $term, $term],
         ],
     ];

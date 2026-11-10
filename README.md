@@ -70,10 +70,8 @@ Deployment Options: Available as a cloud-based Software as a Service (SaaS) solu
 
 Integrations: Connects seamlessly with standard productivity tools (Google Workspace, Microsoft 365), legal research platforms, communication channels, and third-party accounting applications.
 
-## Local SQL Server setup
+## Local XAMPP database setup
 
-The PHP application connects to Microsoft SQL Server using the PDO_SQLSRV extension. The provided `.env.example` documents the settings; copy it to `.env` and set `DB_HOST`, `DB_NAME`, and `DB_AUTH` for your SQL Server instance. The local `.env` targets `localhost`, database `loms_v2`, and Windows Authentication.
+The PHP application connects to MySQL/MariaDB through PDO_MYSQL. Start MySQL in the XAMPP Control Panel and configure `.env` (copy `.env.example` as a starting point) with `DB_HOST=localhost`, `DB_PORT=3306`, and `DB_NAME=law_office_db`. The default XAMPP credentials are `DB_USERNAME=root` and an empty `DB_PASSWORD`; change these if your MySQL account uses a password. Keep `.env` private; it is excluded from Git.
 
-With Windows Authentication, SQL Server authorizes the Windows account running Apache, which may differ from the account used by SSMS when Apache runs as a service. For local XAMPP development, run the XAMPP Control Panel and Apache as the Windows user that can connect in SSMS, rather than starting Apache as the `LocalSystem` service account. Alternatively, grant Apache's service account access to `loms_v2`, or set `DB_AUTH=sql` and provide `DB_USERNAME` and `DB_PASSWORD` in `.env`. Keep `.env` private; it is excluded from Git.
-
-Apply `database/migrations/20261109_add_sql_server_portal_columns.sql` in SSMS before using the appointment-request and assigned-lawyer features. Apply `database/migrations/20261110_add_user_contact_columns.sql` to add or backfill the client contact fields in `dbo.users`. XAMPP must load the `pdo_sqlsrv` extension matching its PHP version.
+The SQL Server-specific scripts in `database/migrations` are for the source SQL Server database and must not be run against MariaDB. The MySQL/MariaDB migrations add the client appointment and assigned-lawyer columns and align date columns with the source schema. Run `20261028_add_appointment_request_details.sql`, `20261028_add_assigned_lawyer_name_to_cases.sql`, and `20261110_align_mysql_datetime_columns.sql` against `law_office_db` before using the application.

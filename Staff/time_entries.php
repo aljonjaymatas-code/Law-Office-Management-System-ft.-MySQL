@@ -24,7 +24,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     } elseif (!DateTime::createFromFormat('!Y-m-d', $dateLogged) || $dateLogged > $today) {
         $error = 'Enter a valid date that is not in the future.';
     } else {
-        $caseCheck = $pdo->prepare('SELECT TOP (1) case_id FROM cases WHERE case_id = :case_id');
+        $caseCheck = $pdo->prepare('SELECT case_id FROM cases WHERE case_id = :case_id');
         $caseCheck->execute(['case_id' => $caseId]);
         if ($caseCheck->fetchColumn() === false) {
             $error = 'The selected case could not be found.';

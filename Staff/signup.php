@@ -5,7 +5,7 @@ require_once __DIR__ . '/_layout.php';
 if (isset($_SESSION['staff_user_id'])) {
     $userId = filter_var($_SESSION['staff_user_id'], FILTER_VALIDATE_INT);
     if ($userId !== false && $userId !== null) {
-        $check = $pdo->prepare('SELECT TOP (1) role FROM users WHERE user_id = :user_id');
+        $check = $pdo->prepare('SELECT role FROM users WHERE user_id = :user_id');
         $check->execute(['user_id' => $userId]);
         $role = $check->fetchColumn();
         if (is_string($role) && staff_is_authorized_role($role)) {
@@ -54,7 +54,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         try {
             $statement = $pdo->prepare(
                 'INSERT INTO users (username, email, password, role)
-                 OUTPUT INSERTED.user_id
                  VALUES (:username, :email, :password, :role)'
             );
             $statement->execute([
@@ -65,7 +64,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             ]);
 
             session_regenerate_id(true);
-            $_SESSION['staff_user_id'] = (int) $statement->fetchColumn();
+            $_SESSION['staff_user_id'] = (int) $pdo->lastInsertId();
             unset($_SESSION['staff_csrf_token']);
             header('Location: index.php');
             exit;

@@ -8,7 +8,7 @@ $emailValue = '';
 if (isset($_SESSION['staff_user_id'])) {
     $userId = filter_var($_SESSION['staff_user_id'], FILTER_VALIDATE_INT);
     if ($userId !== false && $userId !== null) {
-        $check = $pdo->prepare('SELECT TOP (1) role FROM users WHERE user_id = :user_id');
+        $check = $pdo->prepare('SELECT role FROM users WHERE user_id = :user_id');
         $check->execute(['user_id' => $userId]);
         $role = $check->fetchColumn();
         if (is_string($role) && staff_is_authorized_role($role)) {
@@ -30,7 +30,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     } elseif ($email === false || $email === null || !is_string($password) || $password === '') {
         $loginError = 'Enter a valid email address and password.';
     } else {
-        $statement = $pdo->prepare('SELECT TOP (1) user_id, password, role FROM users WHERE LOWER(email) = LOWER(:email)');
+        $statement = $pdo->prepare('SELECT user_id, password, role FROM users WHERE LOWER(email) = LOWER(:email)');
         $statement->execute(['email' => trim($email)]);
         $account = $statement->fetch();
 

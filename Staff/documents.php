@@ -22,7 +22,7 @@ if (isset($_GET['download'])) {
         exit('Invalid document ID.');
     }
 
-    $downloadStatement = $pdo->prepare('SELECT TOP (1) document_name, file_path FROM documents WHERE document_id = :document_id');
+    $downloadStatement = $pdo->prepare('SELECT document_name, file_path FROM documents WHERE document_id = :document_id');
     $downloadStatement->execute(['document_id' => $documentId]);
     $document = $downloadStatement->fetch();
     $uploadRoot = realpath($uploadDirectory);
@@ -70,7 +70,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     } elseif ((int) $file['size'] > $maxFileSize) {
         $error = 'The file must be 10 MB or smaller.';
     } else {
-        $caseCheck = $pdo->prepare('SELECT TOP (1) case_id FROM cases WHERE case_id = :case_id');
+        $caseCheck = $pdo->prepare('SELECT case_id FROM cases WHERE case_id = :case_id');
         $caseCheck->execute(['case_id' => $caseId]);
         $extension = strtolower(pathinfo((string) $file['name'], PATHINFO_EXTENSION));
         $mimeType = (new finfo(FILEINFO_MIME_TYPE))->file((string) $file['tmp_name']);

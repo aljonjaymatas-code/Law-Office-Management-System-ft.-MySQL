@@ -7,7 +7,7 @@ $userRole = $_SESSION['admin_portal_role'] ?? '';
 if (isset($_SESSION['admin_portal_user_id'])) {
     $sessionUserId = filter_var($_SESSION['admin_portal_user_id'], FILTER_VALIDATE_INT);
     if ($sessionUserId !== false && $sessionUserId !== null && $sessionUserId > 0) {
-        $sessionAccountStatement = $pdo->prepare('SELECT TOP (1) role FROM users WHERE user_id = :user_id');
+        $sessionAccountStatement = $pdo->prepare('SELECT role FROM users WHERE user_id = :user_id');
         $sessionAccountStatement->execute(['user_id' => $sessionUserId]);
         $sessionAccountRole = $sessionAccountStatement->fetchColumn();
         if (
@@ -30,7 +30,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($email === false || $email === null || !is_string($password)) {
         $loginError = 'Enter a valid email address and password.';
     } else {
-        $statement = $pdo->prepare('SELECT TOP (1) user_id, password, role FROM users WHERE LOWER(email) = LOWER(:email)');
+        $statement = $pdo->prepare('SELECT user_id, password, role FROM users WHERE LOWER(email) = LOWER(:email)');
         $statement->execute(['email' => trim($email)]);
         $user = $statement->fetch();
         $userRole = is_array($user) ? admin_portal_role_for_account_role((string) $user['role']) : null;

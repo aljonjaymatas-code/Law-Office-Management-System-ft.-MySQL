@@ -80,6 +80,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             padding-left: 50px !important;
         }
 
+        .staff-login-password {
+            padding-right: 50px !important;
+        }
+
         .staff-login-input:focus {
             border-color: #f59e0b;
             box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.12);
@@ -120,7 +124,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     <label for="password" class="mb-1.5 block text-sm font-medium uppercase tracking-wider text-amber-400">Password</label>
                     <div class="relative">
                         <i data-lucide="lock" class="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-500"></i>
-                        <input id="password" name="password" type="password" required autocomplete="current-password" class="<?php echo staff_input_class(); ?> staff-login-input" placeholder="Enter your password">
+                        <input id="password" name="password" type="password" required autocomplete="current-password" class="<?php echo staff_input_class(); ?> staff-login-input staff-login-password" placeholder="Enter your password">
+                        <button type="button" class="absolute right-3 top-1/2 -translate-y-1/2 rounded p-1 text-slate-400 transition hover:text-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-500" aria-label="Show password" aria-pressed="false" aria-controls="password">
+                            <i data-lucide="eye" class="h-5 w-5"></i>
+                        </button>
                     </div>
                 </div>
                 <button type="submit" class="flex h-[55px] w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-amber-600 to-amber-500 text-base font-bold text-slate-950 transition hover:from-amber-500 hover:to-amber-400">
@@ -137,7 +144,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (window.lucide) window.lucide.createIcons();
 
         const loginForm = document.getElementById('login-form');
+        const passwordInput = document.getElementById('password');
+        const passwordToggle = document.querySelector('[aria-controls="password"]');
         const loginSubmittedKey = 'staff-login-submitted';
+
+        passwordToggle.addEventListener('click', () => {
+            const isVisible = passwordInput.type === 'text';
+            passwordInput.type = isVisible ? 'password' : 'text';
+            passwordToggle.setAttribute('aria-label', isVisible ? 'Show password' : 'Hide password');
+            passwordToggle.setAttribute('aria-pressed', String(!isVisible));
+            passwordToggle.innerHTML = `<i data-lucide="${isVisible ? 'eye' : 'eye-off'}" class="h-5 w-5"></i>`;
+            if (window.lucide) window.lucide.createIcons();
+        });
 
         <?php if ($loginError !== ''): ?>
             sessionStorage.removeItem(loginSubmittedKey);

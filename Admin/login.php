@@ -101,8 +101,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             type="password"
                             required
                             autocomplete="current-password"
-                            class="w-full bg-slate-950/60 border border-slate-800 rounded-lg pl-10 pr-4 py-2.5 text-white text-sm focus:outline-none focus:border-amber-500 transition"
+                            class="w-full bg-slate-950/60 border border-slate-800 rounded-lg pl-10 pr-12 py-2.5 text-white text-sm focus:outline-none focus:border-amber-500 transition"
                             placeholder="••••••••••••">
+                        <button type="button" class="absolute right-3 top-1/2 -translate-y-1/2 rounded p-1 text-slate-400 transition hover:text-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-500" aria-label="Show password" aria-pressed="false" aria-controls="password">
+                            <i data-lucide="eye" class="h-5 w-5"></i>
+                        </button>
                     </div>
                 </div>
 
@@ -128,7 +131,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (window.lucide) window.lucide.createIcons();
 
         const loginForm = document.getElementById('login-form');
+        const passwordInput = document.getElementById('password');
+        const passwordToggle = document.querySelector('[aria-controls="password"]');
         const loginSubmittedKey = 'admin-login-submitted';
+
+        passwordToggle.addEventListener('click', () => {
+            const isVisible = passwordInput.type === 'text';
+            passwordInput.type = isVisible ? 'password' : 'text';
+            passwordToggle.setAttribute('aria-label', isVisible ? 'Show password' : 'Hide password');
+            passwordToggle.setAttribute('aria-pressed', String(!isVisible));
+            passwordToggle.innerHTML = `<i data-lucide="${isVisible ? 'eye' : 'eye-off'}" class="h-5 w-5"></i>`;
+            if (window.lucide) window.lucide.createIcons();
+        });
 
         <?php if ($loginError !== ''): ?>
             sessionStorage.removeItem(loginSubmittedKey);

@@ -8,7 +8,6 @@ function staff_layout_start(string $title, array $user, string $activePage, stri
         'appointments.php'  => ['Appointments', 'calendar-days'],
         'time_entries.php'  => ['Time Entries', 'clock-3'],
         'documents.php'     => ['Documents', 'files'],
-        'templates.php'     => ['Templates', 'file-text'],
     ];
     ?>
     <!DOCTYPE html>

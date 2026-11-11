@@ -115,7 +115,7 @@ staff_layout_start('Client Registration & Intake Management', $user, 'clients.ph
 </section>
 
 <section class="<?php echo staff_panel_class(); ?>">
-    <?php staff_panel_heading('Client Intake Records (No Client Account)'); ?>
+        <?php staff_panel_heading('Client Intake Records '); ?>
     <p class="px-5 pb-4 text-sm text-slate-400">These staff-entered records are not linked to a Client user account and are excluded from dashboard client totals.</p>
     <div class="overflow-x-auto">
         <table class="w-full min-w-[760px] text-left text-sm text-slate-300">

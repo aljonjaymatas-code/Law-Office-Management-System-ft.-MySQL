@@ -138,6 +138,7 @@ $documents = array_map(
 $clientPortalData = [
     'profile' => [
         'fullname' => $user['fullname'],
+        'username' => $user['username'],
         'email' => $user['email'],
         'phone' => $user['phone'] ?? '',
         'address' => $user['address'] ?? '',

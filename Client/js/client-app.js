@@ -1,6 +1,11 @@
-const { useState, useEffect } = React;
+const { useState, useEffect, useRef } = React;
 const ACCESS_REQUESTS_KEY = 'law-office-document-access-requests';
 const portalData = window.CLIENT_PORTAL_DATA || {};
+const CLIENT_THEMES = [
+  { id: 'amber', name: 'Classic Amber', color: '#f59e0b' },
+  { id: 'ocean', name: 'Ocean Blue', color: '#38bdf8' },
+  { id: 'emerald', name: 'Emerald', color: '#34d399' },
+];
 
 function readDocumentAccessRequests() {
   const savedRequests = window.localStorage.getItem(ACCESS_REQUESTS_KEY);
@@ -20,6 +25,11 @@ function ClientPortal() {
   const [selectedDocument, setSelectedDocument] = useState(null);
   const [documentRequestNotice, setDocumentRequestNotice] = useState('');
   const [documentAccessRequests, setDocumentAccessRequests] = useState(readDocumentAccessRequests);
+  const [activeHeaderPopover, setActiveHeaderPopover] = useState(null);
+  const [profileView, setProfileView] = useState('menu');
+  const [theme, setTheme] = useState(document.documentElement.dataset.clientTheme || 'amber');
+  const [themeStorageError, setThemeStorageError] = useState(false);
+  const headerActionsRef = useRef(null);
   const clientProfile = portalData.profile;
   const activeCases = portalData.activeCases;
   const upcomingAppointments = portalData.upcomingAppointments;
@@ -40,6 +50,36 @@ function ClientPortal() {
       window.lucide.createIcons();
     }
   }, [isScheduleModalOpen, selectedDocument, documentAccessRequests]);
+
+  useEffect(() => {
+    if (!activeHeaderPopover) return undefined;
+    const closeOnOutsideClick = (event) => {
+      if (!headerActionsRef.current?.contains(event.target)) {
+        setActiveHeaderPopover(null);
+      }
+    };
+    const closeOnEscape = (event) => {
+      if (event.key === 'Escape') setActiveHeaderPopover(null);
+    };
+    document.addEventListener('mousedown', closeOnOutsideClick);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('mousedown', closeOnOutsideClick);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [activeHeaderPopover]);
+
+  const changeTheme = (nextTheme) => {
+    setTheme(nextTheme);
+    document.documentElement.dataset.clientTheme = nextTheme;
+    setThemeStorageError(false);
+    try {
+      window.localStorage.setItem(window.CLIENT_PORTAL_THEME_STORAGE_KEY, nextTheme);
+    } catch (error) {
+      console.error('Unable to save the Client portal theme.', error);
+      setThemeStorageError(true);
+    }
+  };
 
   useEffect(() => {
     const syncDocumentRequests = (event) => {
@@ -261,31 +301,179 @@ function ClientPortal() {
   // --- 3. CLIENT DASHBOARD VIEW ---
   return (
     <div className="min-h-screen bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-blue-950 via-[#030712] to-black text-slate-100">
-      <header className="bg-slate-900/90 backdrop-blur-md border-b border-amber-500/20 px-6 py-4 flex justify-between items-center shadow-lg sticky top-0 z-50">
+      <header className="bg-slate-900/90 backdrop-blur-md border-b border-amber-500/20 px-4 sm:px-6 py-4 flex justify-between items-center shadow-lg sticky top-0 z-50">
         <div className="flex items-center space-x-3">
           <div className="p-2 bg-gradient-to-br from-amber-500 to-amber-700 rounded-lg text-slate-950">
             <i data-lucide="shield-check" className="w-6 h-6"></i>
           </div>
-          <div>
+          <div className="min-w-0">
             <span className="font-bold text-lg tracking-wide text-white">Law Office Management System</span>
             <span className="block text-xs text-amber-400 font-semibold tracking-wider">CLIENT PORTAL</span>
           </div>
         </div>
-        <div className="flex items-center space-x-4">
-          {/*<button 
-            onClick={() => setIsScheduleModalOpen(true)}
-            className="flex items-center gap-2 bg-gradient-to-r from-amber-600 to-amber-500 hover:from-amber-500 hover:to-amber-400 text-slate-950 font-bold px-4 py-2 rounded-lg text-sm transition shadow-md">
-            <i data-lucide="calendar-plus" className="w-4 h-4"></i> 
-          </button>*/}
-          <div className="text-right hidden sm:block">
-            <p className="text-sm font-semibold text-white">{clientProfile.fullname}</p>
-            <p className="text-xs text-slate-400">{clientProfile.email}</p>
-          </div>
-          <a
-            href="logout.php"
-            className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 px-3 py-2 rounded-lg text-sm transition">
-            <i data-lucide="log-out" className="w-4 h-4 text-amber-400"></i> Logout
-          </a>
+        <div ref={headerActionsRef} className="relative flex shrink-0 items-center gap-2">
+          <button
+            type="button"
+            aria-label="Notifications"
+            aria-expanded={activeHeaderPopover === 'notifications'}
+            aria-controls="client-notifications-popover"
+            onClick={() => setActiveHeaderPopover((current) => current === 'notifications' ? null : 'notifications')}
+            className="flex h-10 w-10 items-center justify-center rounded-xl border border-slate-700 bg-slate-800 text-slate-300 transition hover:border-amber-500/40 hover:text-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-500">
+            <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5">
+              <path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"></path>
+              <path d="M10 21h4"></path>
+            </svg>
+          </button>
+          <button
+            type="button"
+            aria-label={`Open profile menu for ${clientProfile.fullname}`}
+            aria-expanded={activeHeaderPopover === 'profile'}
+            aria-controls="client-profile-popover"
+            onClick={() => {
+              setProfileView('menu');
+              setActiveHeaderPopover((current) => current === 'profile' ? null : 'profile');
+            }}
+            className="flex h-10 w-10 items-center justify-center rounded-xl border border-amber-500/30 bg-amber-500/10 text-amber-300 transition hover:bg-amber-500/20 focus:outline-none focus:ring-2 focus:ring-amber-500">
+            <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5">
+              <circle cx="12" cy="8" r="5"></circle>
+              <path d="M20 21a8 8 0 0 0-16 0"></path>
+            </svg>
+          </button>
+
+          {activeHeaderPopover === 'notifications' && (
+            <section
+              id="client-notifications-popover"
+              aria-label="Notifications"
+              className="absolute right-0 top-full z-50 mt-2 w-72 rounded-2xl border border-slate-700 bg-slate-900 p-4 shadow-2xl">
+              <h2 className="text-sm font-semibold text-white">Notifications</h2>
+              <p role="status" className="mt-3 rounded-xl border border-slate-800 bg-slate-950/60 p-4 text-center text-sm text-slate-400">
+                You’re all caught up. New updates will appear here.
+              </p>
+            </section>
+          )}
+
+          {activeHeaderPopover === 'profile' && (
+            <section
+              id="client-profile-popover"
+              aria-label="Profile and customization"
+              className="absolute right-0 top-full z-50 mt-2 w-[min(20rem,calc(100vw-2rem))] overflow-hidden rounded-2xl border border-slate-700 bg-slate-900 shadow-2xl">
+              <div className="border-b border-slate-800 p-4">
+                {profileView !== 'menu' && (
+                  <button
+                    type="button"
+                    onClick={() => setProfileView('menu')}
+                    className="mb-3 flex items-center gap-2 text-xs font-medium text-slate-400 transition hover:text-white focus:outline-none focus:ring-2 focus:ring-amber-500">
+                    <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4">
+                      <path d="m15 18-6-6 6-6"></path>
+                      <path d="M9 12h12"></path>
+                    </svg>
+                    Profile menu
+                  </button>
+                )}
+                <p className="truncate text-sm font-semibold text-white">{clientProfile.fullname}</p>
+                <p className="truncate text-xs text-slate-400">{clientProfile.email}</p>
+              </div>
+              {profileView === 'menu' && (
+                <div className="space-y-2 p-4">
+                  <button
+                    type="button"
+                    onClick={() => setProfileView('account-settings')}
+                    className="flex w-full items-center gap-3 rounded-xl border border-slate-800 bg-slate-950/50 px-3 py-3 text-left transition hover:border-slate-600 focus:outline-none focus:ring-2 focus:ring-amber-500">
+                    <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4 text-amber-400">
+                      <circle cx="12" cy="8" r="5"></circle>
+                      <path d="M20 21a8 8 0 0 0-16 0"></path>
+                    </svg>
+                    <span className="text-sm font-medium text-slate-200">Account Settings</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setProfileView('customization')}
+                    className="flex w-full items-center gap-3 rounded-xl border border-slate-800 bg-slate-950/50 px-3 py-3 text-left transition hover:border-slate-600 focus:outline-none focus:ring-2 focus:ring-amber-500">
+                    <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4 text-amber-400">
+                      <path d="m14 6 7 7-4 4-7-7"></path>
+                      <path d="M3 21c3-1 5-2 7-5l-3-3c-3 2-4 4-4 8Z"></path>
+                    </svg>
+                    <span className="text-sm font-medium text-slate-200">Customization</span>
+                  </button>
+                </div>
+              )}
+              {profileView === 'account-settings' && (
+                <div className="p-4">
+                  <h2 className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-slate-300">
+                    <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4 text-amber-400">
+                      <circle cx="12" cy="8" r="5"></circle>
+                      <path d="M20 21a8 8 0 0 0-16 0"></path>
+                    </svg>
+                    Account Settings
+                  </h2>
+                  <dl className="space-y-2">
+                    {[
+                      ['Full Name', clientProfile.fullname],
+                      ['Username', clientProfile.username],
+                      ['Email', clientProfile.email],
+                      ['Phone', clientProfile.phone],
+                      ['Address', clientProfile.address],
+                    ].map(([label, value]) => (
+                      <div key={label} className="rounded-lg border border-slate-800 bg-slate-950/50 px-3 py-2">
+                        <dt className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">{label}</dt>
+                        <dd className="mt-1 break-words text-xs font-medium text-slate-200">{value || 'Not provided'}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                </div>
+              )}
+              {profileView === 'customization' && (
+              <div className="p-4">
+                <h2 className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-slate-300">
+                  <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4 text-amber-400">
+                    <path d="m14 6 7 7-4 4-7-7"></path>
+                    <path d="M3 21c3-1 5-2 7-5l-3-3c-3 2-4 4-4 8Z"></path>
+                  </svg>
+                  Customization
+                </h2>
+                <div className="space-y-2" aria-label="Choose an accent theme">
+                  {CLIENT_THEMES.map((option) => (
+                    <button
+                      key={option.id}
+                      type="button"
+                      aria-pressed={theme === option.id}
+                      onClick={() => changeTheme(option.id)}
+                      className={`flex w-full items-center justify-between rounded-xl border px-3 py-2.5 text-left transition focus:outline-none focus:ring-2 focus:ring-amber-500 ${
+                        theme === option.id
+                          ? 'border-amber-500/40 bg-amber-500/10'
+                          : 'border-slate-800 bg-slate-950/50 hover:border-slate-600'
+                      }`}>
+                      <span className="flex items-center gap-3">
+                        <span className="h-3 w-3 rounded-full ring-2 ring-white/10" style={{ backgroundColor: option.color }}></span>
+                        <span className="text-sm font-medium text-slate-200">{option.name}</span>
+                      </span>
+                      {theme === option.id && (
+                        <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4 text-amber-300">
+                          <path d="m5 12 4 4L19 6"></path>
+                        </svg>
+                      )}
+                    </button>
+                  ))}
+                </div>
+                {themeStorageError && (
+                  <p role="status" className="mt-3 text-xs text-amber-200">
+                    Theme changed for this visit, but your browser couldn’t save it for next time.
+                  </p>
+                )}
+              </div>
+              )}
+              <a
+                href="logout.php"
+                className="flex items-center gap-2 border-t border-slate-800 bg-slate-950/40 px-4 py-3 text-sm font-medium text-slate-300 transition hover:bg-slate-800 hover:text-white">
+                <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4 text-amber-400">
+                  <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
+                  <path d="m16 17 5-5-5-5"></path>
+                  <path d="M21 12H9"></path>
+                </svg>
+                Log Out
+              </a>
+            </section>
+          )}
         </div>
       </header>
 

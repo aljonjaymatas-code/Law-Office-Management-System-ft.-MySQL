@@ -10,13 +10,90 @@ if (!in_array($userRole, ['admin', 'lawyer'], true) || empty($_SESSION['admin_po
     exit;
 }
 
-$statement = $pdo->prepare('SELECT username, email, role FROM users WHERE user_id = :user_id');
+$statement = $pdo->prepare('SELECT user_id, username, email, role FROM users WHERE user_id = :user_id');
 $statement->execute(['user_id' => (int) $_SESSION['admin_portal_user_id']]);
 $account = $statement->fetch();
 
 if (!is_array($account) || admin_portal_role_for_account_role((string) $account['role']) !== $userRole) {
     unset($_SESSION['admin_portal_role'], $_SESSION['admin_portal_user_id']);
     header('Location: login.php');
+    exit;
+}
+
+if (!isset($_SESSION['admin_document_review_csrf_token'])) {
+    $_SESSION['admin_document_review_csrf_token'] = bin2hex(random_bytes(32));
+}
+
+$documentReviewActionNotice = null;
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'review_document') {
+    $documentId = filter_var($_POST['document_id'] ?? null, FILTER_VALIDATE_INT);
+    $decision = $_POST['review_status'] ?? null;
+    $comment = is_string($_POST['review_comment'] ?? null) ? trim($_POST['review_comment']) : '';
+
+    if (
+        !is_string($_POST['_csrf'] ?? null)
+        || !hash_equals($_SESSION['admin_document_review_csrf_token'], $_POST['_csrf'])
+    ) {
+        $documentReviewActionNotice = ['type' => 'error', 'message' => 'Your session has expired. Refresh the page and try again.'];
+    } elseif ($documentId === false || $documentId === null || $documentId < 1) {
+        $documentReviewActionNotice = ['type' => 'error', 'message' => 'Select a valid document to review.'];
+    } elseif (!in_array($decision, ['Approved', 'Declined'], true)) {
+        $documentReviewActionNotice = ['type' => 'error', 'message' => 'Choose whether to approve or decline the document.'];
+    } elseif (strlen($comment) > 2000) {
+        $documentReviewActionNotice = ['type' => 'error', 'message' => 'Keep the review comment within 2,000 characters.'];
+    } elseif ($decision === 'Declined' && $comment === '') {
+        $documentReviewActionNotice = ['type' => 'error', 'message' => 'Add a comment explaining why the document is declined.'];
+    } else {
+        $documentCheckQuery =
+            'SELECT d.document_id, d.review_status
+             FROM documents d
+             INNER JOIN cases c ON c.case_id = d.case_id
+             WHERE d.document_id = :document_id';
+        $documentCheckParams = ['document_id' => $documentId];
+        if ($userRole === 'lawyer') {
+            $documentCheckQuery .=
+                ' AND (
+                    c.assigned_lawyer_id = :user_id
+                    OR (
+                        c.assigned_lawyer_id IS NULL
+                        AND LOWER(TRIM(c.assigned_lawyer_name)) = LOWER(TRIM(:username))
+                    )
+                )';
+            $documentCheckParams['user_id'] = (int) $account['user_id'];
+            $documentCheckParams['username'] = (string) $account['username'];
+        }
+        $documentCheck = $pdo->prepare($documentCheckQuery);
+        $documentCheck->execute($documentCheckParams);
+        $document = $documentCheck->fetch();
+
+        if (!is_array($document)) {
+            $documentReviewActionNotice = ['type' => 'error', 'message' => 'The selected document could not be found.'];
+        } elseif ($document['review_status'] !== 'Pending Review') {
+            $documentReviewActionNotice = ['type' => 'error', 'message' => 'This document has already been reviewed.'];
+        } else {
+            $reviewUpdate = $pdo->prepare(
+                "UPDATE documents
+                 SET review_status = :review_status,
+                     review_comment = :review_comment,
+                     reviewed_by = :reviewed_by,
+                     reviewed_at = CURRENT_TIMESTAMP
+                 WHERE document_id = :document_id AND review_status = 'Pending Review'"
+            );
+            $reviewUpdate->execute([
+                'review_status' => $decision,
+                'review_comment' => $comment !== '' ? $comment : null,
+                'reviewed_by' => (int) $account['user_id'],
+                'document_id' => $documentId,
+            ]);
+
+            $documentReviewActionNotice = $reviewUpdate->rowCount() === 1
+                ? ['type' => 'success', 'message' => 'Document ' . strtolower($decision) . ' successfully.']
+                : ['type' => 'error', 'message' => 'This document has already been reviewed. Refresh the list and try again.'];
+        }
+    }
+
+    $_SESSION['admin_document_review_notice'] = $documentReviewActionNotice;
+    header('Location: index.php?tab=document-review');
     exit;
 }
 
@@ -136,6 +213,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'creat
 
 $appointmentActionNotice = $_SESSION['admin_appointment_notice'] ?? null;
 unset($_SESSION['admin_appointment_notice']);
+$documentReviewActionNotice = $_SESSION['admin_document_review_notice'] ?? null;
+unset($_SESSION['admin_document_review_notice']);
 $timeEntryActionNotice = $_SESSION['admin_time_entry_notice'] ?? null;
 unset($_SESSION['admin_time_entry_notice']);
 if (!isset($_SESSION['admin_appointment_csrf_token'])) {
@@ -150,6 +229,7 @@ $accountLabel = in_array($accountRole, ['admin', 'administrator', 'managing part
     ? 'Partner / Managing Attorney'
     : 'Lawyer / Attorney';
 $accountDetails = [
+    'userId' => (int) $account['user_id'],
     'name' => $account['username'],
     'email' => $account['email'],
     'roleLabel' => $accountLabel,
@@ -174,7 +254,7 @@ $pendingAppointmentsStatement = $pdo->query(
 );
 $pendingAppointments = $pendingAppointmentsStatement->fetchAll();
 $calendarAppointmentsStatement = $pdo->query(
-    "SELECT a.appointment_id, a.title, a.appointment_date, a.type, a.status,
+    "SELECT a.appointment_id, a.title, a.appointment_date, a.type, a.status, a.user_id,
             c.fullname AS client_name, cs.case_number, cs.title AS case_title
      FROM appointments a
      LEFT JOIN clients c ON c.client_id = a.client_id
@@ -193,14 +273,66 @@ $caseRecordsStatement = $pdo->query(
      ORDER BY c.filed_date DESC, c.case_id DESC"
 );
 $caseRecords = $caseRecordsStatement->fetchAll();
-$timeEntriesStatement = $pdo->query(
-    'SELECT t.time_entry_id, t.hours, t.description, t.date_logged,
+$reviewDocumentsQuery =
+    "SELECT d.document_id, d.document_name, d.file_path, d.upload_date,
+            d.review_status, d.review_comment, d.reviewed_at,
+            c.case_number, c.title AS case_title,
+            uploader.username AS uploaded_by,
+            reviewer.username AS reviewed_by
+     FROM documents d
+     INNER JOIN cases c ON c.case_id = d.case_id
+     LEFT JOIN users uploader ON uploader.user_id = d.uploaded_by
+     LEFT JOIN users reviewer ON reviewer.user_id = d.reviewed_by";
+$reviewDocumentsParams = [];
+if ($userRole === 'lawyer') {
+    $reviewDocumentsQuery .=
+        ' WHERE c.assigned_lawyer_id = :user_id
+          OR (
+              c.assigned_lawyer_id IS NULL
+              AND LOWER(TRIM(c.assigned_lawyer_name)) = LOWER(TRIM(:username))
+          )';
+    $reviewDocumentsParams = [
+        'user_id' => (int) $account['user_id'],
+        'username' => (string) $account['username'],
+    ];
+}
+$reviewDocumentsQuery .= ' ORDER BY d.upload_date DESC, d.document_id DESC';
+$reviewDocumentsStatement = $pdo->prepare($reviewDocumentsQuery);
+$reviewDocumentsStatement->execute($reviewDocumentsParams);
+$reviewDocuments = array_map(
+    static function (array $document): array {
+        return [
+            'document_id' => (int) $document['document_id'],
+            'document_name' => $document['document_name'],
+            'upload_date' => $document['upload_date'],
+            'review_status' => $document['review_status'],
+            'review_comment' => $document['review_comment'],
+            'reviewed_at' => $document['reviewed_at'],
+            'reviewed_by' => $document['reviewed_by'],
+            'case_number' => $document['case_number'],
+            'case_title' => $document['case_title'],
+            'uploaded_by' => $document['uploaded_by'] ?: 'Staff',
+            'previewable' => preg_match('/\.(?:pdf|jpg|jpeg|png|txt)$/i', (string) $document['file_path']) === 1,
+            'file_url' => 'document-file.php?id=' . (int) $document['document_id'] . '&preview=1',
+            'download_url' => 'document-file.php?id=' . (int) $document['document_id'],
+        ];
+    },
+    $reviewDocumentsStatement->fetchAll()
+);
+$timeEntriesQuery =
+    'SELECT t.time_entry_id, t.user_id, t.hours, t.description, t.date_logged,
             c.case_number, c.title AS case_title, u.username AS logged_by
      FROM time_entries t
      INNER JOIN cases c ON c.case_id = t.case_id
-     LEFT JOIN users u ON u.user_id = t.user_id
-     ORDER BY t.date_logged DESC, t.time_entry_id DESC'
-);
+     LEFT JOIN users u ON u.user_id = t.user_id';
+$timeEntriesParams = [];
+if ($userRole === 'lawyer') {
+    $timeEntriesQuery .= ' WHERE t.user_id = :user_id';
+    $timeEntriesParams['user_id'] = (int) $_SESSION['admin_portal_user_id'];
+}
+$timeEntriesQuery .= ' ORDER BY t.date_logged DESC, t.time_entry_id DESC';
+$timeEntriesStatement = $pdo->prepare($timeEntriesQuery);
+$timeEntriesStatement->execute($timeEntriesParams);
 $timeEntries = $timeEntriesStatement->fetchAll();
 $totalBillableHoursYtd = (float) $pdo->query(
     'SELECT COALESCE(SUM(hours), 0) FROM time_entries WHERE YEAR(date_logged) = YEAR(CURRENT_DATE())'
@@ -237,7 +369,8 @@ if ($userRole === 'admin') {
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
-    <link rel="stylesheet" href="../CSS/styles.css">
+    <link rel="stylesheet" href="../CSS/style.css">
+    <link rel="stylesheet" href="styles.css?v=3">
 </head>
 <body class="bg-[#020617] text-slate-100 antialiased selection:bg-amber-500 selection:text-slate-950">
     <div id="root"></div>
@@ -254,13 +387,16 @@ if ($userRole === 'admin') {
         window.ADMIN_APPOINTMENT_NOTICE = <?php echo json_encode($appointmentActionNotice, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT); ?>;
         window.ADMIN_TIME_ENTRY_CSRF_TOKEN = <?php echo json_encode($_SESSION['admin_time_entry_csrf_token']); ?>;
         window.ADMIN_TIME_ENTRY_NOTICE = <?php echo json_encode($timeEntryActionNotice, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT); ?>;
+        window.ADMIN_DOCUMENT_REVIEW_NOTICE = <?php echo json_encode($documentReviewActionNotice, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT); ?>;
+        window.ADMIN_DOCUMENT_REVIEW_CSRF_TOKEN = <?php echo json_encode($_SESSION['admin_document_review_csrf_token']); ?>;
+        window.ADMIN_REVIEW_DOCUMENTS = <?php echo json_encode($reviewDocuments, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT); ?>;
         window.ADMIN_TIME_ENTRIES = <?php echo json_encode($timeEntries, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT); ?>;
         window.ADMIN_TOTAL_BILLABLE_HOURS_YTD = <?php echo json_encode($totalBillableHoursYtd); ?>;
         window.ADMIN_CASE_RECORDS = <?php echo json_encode($caseRecords, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT); ?>;
         window.ADMIN_TOTAL_CLIENTS = <?php echo json_encode($totalClients); ?>;
         window.ADMIN_CLIENT_RECORDS = <?php echo json_encode($clientRecords, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT); ?>;
     </script>
-    <script src="js/admin-storage.js"></script>
-    <script type="text/babel" src="js/admin-app.jsx?v=18"></script>
+    <script src="js/admin-storage.js?v=2"></script>
+    <script type="text/babel" src="js/admin-app.jsx?v=37"></script>
 </body>
 </html>

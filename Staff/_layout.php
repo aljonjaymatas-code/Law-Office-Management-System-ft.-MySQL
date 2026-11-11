@@ -9,16 +9,31 @@ function staff_layout_start(string $title, array $user, string $activePage, stri
         'time_entries.php'  => ['Time Entries', 'clock-3'],
         'documents.php'     => ['Documents', 'files'],
     ];
+    $themeStorageKey = 'staff-portal-theme:' . strtolower((string) $user['email']);
+    $roleLabel = ucwords(str_replace(['_', '-'], ' ', (string) $user['role']));
     ?>
     <!DOCTYPE html>
-    <html lang="en">
+    <html lang="en" data-theme-storage-key="<?php echo staff_h($themeStorageKey); ?>">
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title><?php echo staff_h($title); ?> - Staff Portal</title>
+        <script>
+            (() => {
+                const root = document.documentElement;
+                const storageKey = root.dataset.themeStorageKey;
+                try {
+                    const savedTheme = window.localStorage.getItem(storageKey);
+                    root.dataset.staffTheme = ['amber', 'ocean', 'emerald'].includes(savedTheme) ? savedTheme : 'amber';
+                } catch (error) {
+                    console.error('Unable to read the saved Staff portal theme.', error);
+                    root.dataset.staffTheme = 'amber';
+                }
+            })();
+        </script>
         <script src="https://cdn.tailwindcss.com"></script>
         <script src="https://unpkg.com/lucide@latest"></script>
-        <link rel="stylesheet" href="../CSS/staff-styles.css">
+        <link rel="stylesheet" href="../CSS/staff-styles.css?v=4">
         <style>
             html {
                 overflow-y: scroll;
@@ -61,14 +76,85 @@ function staff_layout_start(string $title, array $user, string $activePage, stri
                         </div>
                     </div>
                 </form>
-                <div class="flex items-center gap-4">
-                    <div class="hidden text-right sm:block">
-                        <p class="text-sm font-semibold text-white"><?php echo staff_h($user['username']); ?></p>
-                        <p class="text-xs text-slate-400"><?php echo staff_h($user['email']); ?></p>
+                <div class="flex shrink-0 items-center gap-3">
+                    <div class="relative" data-header-popover>
+                        <button
+                            type="button"
+                            aria-label="Notifications"
+                            aria-controls="staff-notifications-panel"
+                            aria-expanded="false"
+                            class="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-slate-700 bg-slate-950 text-amber-400 transition hover:border-amber-500/60 hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                            data-header-popover-toggle>
+                            <i data-lucide="bell" class="h-5 w-5"></i>
+                        </button>
+                        <section
+                            id="staff-notifications-panel"
+                            aria-label="Notifications"
+                            class="absolute right-0 top-full z-50 mt-3 w-72 rounded-xl border border-slate-700 bg-slate-900 p-4 text-left shadow-2xl"
+                            data-header-popover-panel
+                            hidden>
+                            <h2 class="text-sm font-semibold text-white">Notifications</h2>
+                            <p class="mt-2 text-sm text-slate-400" role="status">You’re all caught up. There are no notifications yet.</p>
+                        </section>
                     </div>
-                    <a href="logout.php" class="inline-flex items-center gap-2 rounded-lg border border-slate-700 px-3 py-2 text-sm text-slate-300 transition hover:border-red-500/50 hover:text-red-300">
-                        <i data-lucide="log-out" class="h-4 w-4"></i><span>Log out</span>
-                    </a>
+                    <div class="relative" data-header-popover>
+                        <button
+                            type="button"
+                            aria-label="Open profile menu"
+                            aria-controls="staff-profile-panel"
+                            aria-expanded="false"
+                            class="inline-flex h-10 w-10 items-center justify-center rounded-full border border-amber-500 bg-slate-950 text-amber-400 transition hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                            data-header-popover-toggle>
+                            <i data-lucide="user-round" class="h-5 w-5"></i>
+                        </button>
+                        <section
+                            id="staff-profile-panel"
+                            aria-label="Profile menu"
+                            class="absolute right-0 top-full z-50 mt-3 hidden h-[calc(100dvh-8rem)] min-h-[320px] max-h-[36rem] w-64 flex flex-col overflow-hidden rounded-xl border border-slate-700 bg-slate-950 text-left shadow-2xl"
+                            data-header-popover-panel
+                            hidden>
+                            <div class="flex items-center gap-3 border-b border-slate-800 px-4 py-4">
+                                <span class="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-amber-500/60 bg-slate-900 text-amber-400">
+                                    <i data-lucide="user-round" class="h-5 w-5"></i>
+                                </span>
+                                <span class="min-w-0">
+                                    <span class="block truncate text-sm font-semibold text-white"><?php echo staff_h($user['username']); ?></span>
+                                    <span class="block text-xs text-amber-400"><?php echo staff_h($roleLabel); ?></span>
+                                    <span class="block truncate text-[11px] text-slate-400"><?php echo staff_h($user['email']); ?></span>
+                                </span>
+                            </div>
+                            <nav class="flex-1 space-y-1 overflow-y-auto p-2" aria-label="Profile navigation">
+                                <?php foreach ($navigation as $path => [$label, $icon]): ?>
+                                    <a
+                                        href="<?php echo staff_h($path); ?>"
+                                        class="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition <?php echo $activePage === $path ? 'bg-amber-500/15 text-amber-300' : 'text-slate-300 hover:bg-slate-800 hover:text-white'; ?>"
+                                        <?php echo $activePage === $path ? 'aria-current="page"' : ''; ?>>
+                                        <i data-lucide="<?php echo staff_h($icon); ?>" class="h-4 w-4 shrink-0"></i>
+                                        <span><?php echo staff_h($label); ?></span>
+                                    </a>
+                                <?php endforeach; ?>
+                            </nav>
+                            <div class="space-y-1 border-t border-slate-800 p-2">
+                                <?php foreach ([
+                                    'settings.php?view=account-settings' => ['Account Settings', 'settings'],
+                                    'settings.php?view=customization' => ['Customization', 'paintbrush'],
+                                ] as $path => [$label, $icon]): ?>
+                                    <a
+                                        href="<?php echo staff_h($path); ?>"
+                                        class="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition <?php echo $activePage === $path ? 'bg-amber-500/15 text-amber-300' : 'text-slate-300 hover:bg-slate-800 hover:text-white'; ?>"
+                                        <?php echo $activePage === $path ? 'aria-current="page"' : ''; ?>>
+                                        <i data-lucide="<?php echo staff_h($icon); ?>" class="h-4 w-4 shrink-0"></i>
+                                        <span><?php echo staff_h($label); ?></span>
+                                    </a>
+                                <?php endforeach; ?>
+                            </div>
+                            <footer class="mt-auto border-t border-slate-800 p-3">
+                                <a href="logout.php" class="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-red-300 transition hover:bg-red-500/10 hover:text-red-200">
+                                    <i data-lucide="log-out" class="h-4 w-4"></i><span>Log Out</span>
+                                </a>
+                            </footer>
+                        </section>
+                    </div>
                 </div>
             </div>
         </header>
@@ -120,6 +206,46 @@ function staff_layout_end(): void
         <script src="../JS/phone-input.js"></script>
         <script>
             if (window.lucide) window.lucide.createIcons();
+
+            (() => {
+                const groups = [...document.querySelectorAll('[data-header-popover]')];
+                const closeGroup = (group, restoreFocus = false) => {
+                    const toggle = group.querySelector('[data-header-popover-toggle]');
+                    const panel = group.querySelector('[data-header-popover-panel]');
+                    if (!toggle || !panel) return;
+                    const wasOpen = toggle.getAttribute('aria-expanded') === 'true';
+                    panel.hidden = true;
+                    panel.classList.add('hidden');
+                    toggle.setAttribute('aria-expanded', 'false');
+                    if (restoreFocus && wasOpen) toggle.focus();
+                };
+
+                groups.forEach((group) => {
+                    const toggle = group.querySelector('[data-header-popover-toggle]');
+                    const panel = group.querySelector('[data-header-popover-panel]');
+                    if (!toggle || !panel) return;
+
+                    toggle.addEventListener('click', () => {
+                        const shouldOpen = toggle.getAttribute('aria-expanded') !== 'true';
+                        groups.forEach((otherGroup) => closeGroup(otherGroup));
+                        if (shouldOpen) {
+                            panel.hidden = false;
+                            panel.classList.remove('hidden');
+                            toggle.setAttribute('aria-expanded', 'true');
+                        }
+                    });
+                });
+
+                document.addEventListener('click', (event) => {
+                    groups.forEach((group) => {
+                        if (!group.contains(event.target)) closeGroup(group);
+                    });
+                });
+
+                document.addEventListener('keydown', (event) => {
+                    if (event.key === 'Escape') groups.forEach((group) => closeGroup(group, true));
+                });
+            })();
 
             document.querySelectorAll('[data-dialog-toggle]').forEach((button) => {
                 button.addEventListener('click', () => {

@@ -122,11 +122,14 @@ $cases = $pdo->query(
 )->fetchAll();
 $documentsStatement = $pdo->query(
     'SELECT d.document_id, d.document_name, d.file_path, d.upload_date,
-            c.case_number, c.title AS case_title, cl.fullname AS client_name, u.username AS uploaded_by_name
+            d.review_status, d.review_comment, d.reviewed_at,
+            c.case_number, c.title AS case_title, cl.fullname AS client_name,
+            u.username AS uploaded_by_name, reviewer.username AS reviewed_by_name
      FROM documents d
      INNER JOIN cases c ON c.case_id = d.case_id
      INNER JOIN clients cl ON cl.client_id = c.client_id
      LEFT JOIN users u ON u.user_id = d.uploaded_by
+     LEFT JOIN users reviewer ON reviewer.user_id = d.reviewed_by
      ORDER BY d.upload_date DESC, d.document_id DESC'
 );
 $documents = $documentsStatement->fetchAll();
@@ -185,13 +188,13 @@ staff_layout_start('Case Document Uploading', $user, 'documents.php', staff_take
 <section class="<?php echo staff_panel_class(); ?>">
     <?php staff_panel_heading('Documents from the LOMS database'); ?>
     <div class="overflow-x-auto">
-        <table class="w-full min-w-[850px] text-left text-sm text-slate-300">
+        <table class="w-full min-w-[1050px] text-left text-sm text-slate-300">
             <thead class="bg-slate-950/60 text-xs uppercase tracking-wider text-amber-400/80">
-                <tr><th class="p-4">Document</th><th class="p-4">Case</th><th class="p-4">Client</th><th class="p-4">Uploaded By</th><th class="p-4">Upload Date</th><th class="p-4">File</th></tr>
+                <tr><th class="p-4">Document</th><th class="p-4">Case</th><th class="p-4">Client</th><th class="p-4">Uploaded By</th><th class="p-4">Upload Date</th><th class="p-4">Review Status</th><th class="p-4">Attorney Comment</th><th class="p-4">File</th></tr>
             </thead>
             <tbody class="divide-y divide-slate-800/60">
                 <?php if ($documents === []): ?>
-                    <?php staff_table_empty_row(6, 'No documents have been uploaded.'); ?>
+                    <?php staff_table_empty_row(8, 'No documents have been uploaded.'); ?>
                 <?php else: foreach ($documents as $document): ?>
                     <tr class="hover:bg-slate-800/40">
                         <td class="p-4 font-semibold text-white"><?php echo staff_h($document['document_name']); ?></td>
@@ -199,6 +202,16 @@ staff_layout_start('Case Document Uploading', $user, 'documents.php', staff_take
                         <td class="p-4"><?php echo staff_h($document['client_name']); ?></td>
                         <td class="p-4"><?php echo staff_h($document['uploaded_by_name'] ?: '—'); ?></td>
                         <td class="p-4"><?php echo staff_h(date('M j, Y', strtotime($document['upload_date']))); ?></td>
+                        <td class="p-4">
+                            <?php $reviewStatus = $document['review_status'] ?: 'Pending Review'; ?>
+                            <span class="rounded-full border px-3 py-1 text-xs font-medium <?php echo $reviewStatus === 'Approved' ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300' : ($reviewStatus === 'Declined' ? 'border-red-500/30 bg-red-500/10 text-red-300' : 'border-amber-500/30 bg-amber-500/10 text-amber-300'); ?>">
+                                <?php echo staff_h($reviewStatus); ?>
+                            </span>
+                            <?php if ($document['reviewed_at']): ?>
+                                <span class="mt-2 block text-xs text-slate-500">By <?php echo staff_h($document['reviewed_by_name'] ?: 'Attorney'); ?> · <?php echo staff_h(date('M j, Y', strtotime($document['reviewed_at']))); ?></span>
+                            <?php endif; ?>
+                        </td>
+                        <td class="max-w-xs whitespace-pre-wrap p-4 text-slate-400"><?php echo staff_h($document['review_comment'] ?: '—'); ?></td>
                         <td class="p-4"><a href="documents.php?download=<?php echo (int) $document['document_id']; ?>" class="font-medium text-amber-300 hover:underline">Download</a></td>
                     </tr>
                 <?php endforeach; endif; ?>

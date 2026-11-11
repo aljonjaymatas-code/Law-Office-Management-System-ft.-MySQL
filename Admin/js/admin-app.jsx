@@ -1,19 +1,59 @@
 const { useState, useEffect, useRef } = React;
-        const { DOCUMENT_REVIEW_KEY, APPOINTMENTS_KEY, NOTIFICATIONS_KEY, readNotifications, readAppointmentRecords, readDocumentSubmissions, getLocalDateString } = window.AdminPortalStorage;
+        const { APPOINTMENTS_KEY, NOTIFICATIONS_KEY, readNotifications, readAppointmentRecords, readActivityHistory, recordActivity, getLocalDateString } = window.AdminPortalStorage;
 const currentUser = window.ADMIN_USER;
+const ADMIN_THEMES = [
+  { id: 'amber', name: 'Classic Amber', description: 'Warm gold accents', color: '#f59e0b' },
+  { id: 'ocean', name: 'Ocean Blue', description: 'Calm blue accents', color: '#38bdf8' },
+  { id: 'emerald', name: 'Emerald', description: 'Fresh green accents', color: '#34d399' }
+];
+const ADMIN_THEME_STORAGE_KEY = `admin-portal-theme:${currentUser.email}`;
+
+function AttorneyMenuIcon({ name, className = 'h-4 w-4' }) {
+  if (name === 'settings') {
+    return (
+      <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className={className}>
+        <path d="M12 3 14 4l2.2-.3 1.3 1.8 2 .9-.1 2.2 1.3 1.8-1.1 2 1.1 2-1.3 1.8.1 2.2-2 .9-1.3 1.8L14 20l-2 1-2-1-2.2.3-1.3-1.8-2-.9.1-2.2-1.3-1.8 1.1-2-1.1-2 1.3-1.8-.1-2.2 2-.9 1.3-1.8L10 4l2-1Z" />
+        <circle cx="12" cy="12" r="3" />
+      </svg>
+    );
+  }
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <path d="m14 6 4 4M3 21c2.2-.5 4.1-1.7 5.7-3.3L20 6.4a2.1 2.1 0 0 0-3-3L5.7 14.7A11.4 11.4 0 0 0 3 21Z" />
+      <path d="M3 21c2.1-.1 4-.8 5.5-2.1" />
+    </svg>
+  );
+}
+
+function readAdminThemePreference() {
+  try {
+    const savedTheme = window.localStorage.getItem(ADMIN_THEME_STORAGE_KEY);
+    return {
+      theme: ADMIN_THEMES.some((theme) => theme.id === savedTheme) ? savedTheme : 'amber',
+      storageError: false
+    };
+  } catch (error) {
+    console.error('Unable to read the saved portal theme.', error);
+    return { theme: 'amber', storageError: true };
+  }
+}
 
         function AdminLawyerDashboard() {
           const [userRole, setUserRole] = useState(window.ADMIN_USER_ROLE === 'lawyer' ? 'lawyer' : 'admin');
           const requestedTab = new URLSearchParams(window.location.search).get('tab');
-          const [activeTab, setActiveTab] = useState(userRole === 'admin' ? 'overview' : requestedTab === 'schedule' || requestedTab === 'hours' ? requestedTab : 'cases');
+          const [activeTab, setActiveTab] = useState(userRole === 'admin' ? 'overview' : ['overview', 'cases', 'schedule', 'hours', 'document-review'].includes(requestedTab) ? requestedTab : 'overview');
           const [menuOpen, setMenuOpen] = useState(false);
+          const profileMenuRef = useRef(null);
+          const [themePreference, setThemePreference] = useState(readAdminThemePreference);
+          const selectedTheme = themePreference.theme;
           const [searchQuery, setSearchQuery] = useState('');
+          const [searchOpen, setSearchOpen] = useState(false);
           const searchInputRef = useRef(null);
-          const [reviewDocuments, setReviewDocuments] = useState(readDocumentSubmissions);
+          const searchContainerRef = useRef(null);
+          const [reviewDocuments] = useState(() => Array.isArray(window.ADMIN_REVIEW_DOCUMENTS) ? window.ADMIN_REVIEW_DOCUMENTS : []);
           const [selectedReviewDocumentId, setSelectedReviewDocumentId] = useState(null);
           const [declineMode, setDeclineMode] = useState(false);
           const [declineComment, setDeclineComment] = useState('');
-          const [declineError, setDeclineError] = useState('');
           const [appointmentRequests, setAppointmentRequests] = useState(readAppointmentRecords);
           const [selectedAppointmentId, setSelectedAppointmentId] = useState(null);
           const [appointmentAvailabilityDate, setAppointmentAvailabilityDate] = useState('');
@@ -22,6 +62,15 @@ const currentUser = window.ADMIN_USER;
           const [appointmentDecisionError, setAppointmentDecisionError] = useState('');
           const [notifications, setNotifications] = useState(readNotifications);
           const [notificationsOpen, setNotificationsOpen] = useState(false);
+          const [activityHistory, setActivityHistory] = useState(() => {
+            try {
+              return readActivityHistory(currentUser.email);
+            } catch (error) {
+              console.error('Unable to load account activity history.', error);
+              return [];
+            }
+          });
+          const [activityStorageError, setActivityStorageError] = useState(false);
           const timeEntries = Array.isArray(window.ADMIN_TIME_ENTRIES) ? window.ADMIN_TIME_ENTRIES : [];
           const [timeEntryModalOpen, setTimeEntryModalOpen] = useState(Boolean(window.ADMIN_TIME_ENTRY_NOTICE && window.ADMIN_TIME_ENTRY_NOTICE.type === 'error'));
 
@@ -31,6 +80,26 @@ const currentUser = window.ADMIN_USER;
           const pendingAppointments = Array.isArray(window.ADMIN_PENDING_APPOINTMENTS) ? window.ADMIN_PENDING_APPOINTMENTS : [];
           const calendarAppointments = Array.isArray(window.ADMIN_CALENDAR_APPOINTMENTS) ? window.ADMIN_CALENDAR_APPOINTMENTS : [];
 
+          const recordAccountActivity = (activity, record = 'Attorney workspace', status = 'Completed') => {
+            try {
+              recordActivity(currentUser.email, activity, record, status, currentUser.name);
+              setActivityHistory(readActivityHistory(currentUser.email));
+              setActivityStorageError(false);
+            } catch (error) {
+              console.error('Unable to save account activity history.', error);
+              setActivityStorageError(true);
+            }
+          };
+
+          useEffect(() => {
+            if (window.ADMIN_APPOINTMENT_NOTICE?.type === 'success') {
+              recordAccountActivity('Confirmed an appointment', 'Court Calendar');
+            }
+            if (window.ADMIN_TIME_ENTRY_NOTICE?.type === 'success') {
+              recordAccountActivity('Logged billable hours', 'Billable Hours');
+            }
+          }, []);
+
           const firmReporting = {
             totalCases: window.ADMIN_TOTAL_CASES,
             pendingAppointments: window.ADMIN_PENDING_APPOINTMENTS_COUNT,
@@ -39,6 +108,34 @@ const currentUser = window.ADMIN_USER;
           };
 
           const assignedCases = caseRecords.filter((legalCase) => legalCase.lawyer_name);
+          const caseStatusSummary = ['Active', 'Pending', 'Closed', 'Other'].map((status) => ({
+            status,
+            count: assignedCases.filter((legalCase) => {
+              const caseStatus = String(legalCase.status).toLowerCase();
+              return status === 'Other'
+                ? !['active', 'pending', 'closed'].includes(caseStatus)
+                : caseStatus === status.toLowerCase();
+            }).length
+          }));
+          const maxCaseStatusCount = Math.max(...caseStatusSummary.map((item) => item.count), 1);
+          const billableMonthSummary = Array.from({ length: 6 }, (_, index) => {
+            const date = new Date();
+            date.setDate(1);
+            date.setMonth(date.getMonth() - (5 - index));
+            const year = date.getFullYear();
+            const month = date.getMonth();
+            const hours = timeEntries.reduce((total, entry) => {
+              const loggedDate = new Date(`${entry.date_logged}T00:00:00`);
+              return loggedDate.getFullYear() === year && loggedDate.getMonth() === month
+                ? total + Number(entry.hours || 0)
+                : total;
+            }, 0);
+            return { label: date.toLocaleString(undefined, { month: 'short' }), hours };
+          });
+          const maxMonthlyHours = Math.max(...billableMonthSummary.map((month) => month.hours), 1);
+          const billableChartPoints = billableMonthSummary.map((month, index) => (
+            `${20 + index * 112},${150 - (month.hours / maxMonthlyHours) * 120}`
+          )).join(' ');
 
           const masterCalendarAppointments = [
             ...calendarAppointments
@@ -52,12 +149,29 @@ const currentUser = window.ADMIN_USER;
               }))
           ];
 
-          const transactionHistory = [
-            { transaction_id: 'TXN-2026-0418', date: '2026-04-18 10:42 AM', activity: 'Retainer payment received', record: 'Doe vs. Enterprise', performed_by: 'Victoria Sterling', status: 'Completed' },
-            { transaction_id: 'TXN-2026-0417', date: '2026-04-17 03:16 PM', activity: 'Legal document uploaded', record: 'Acme Breach of Contract', performed_by: 'Marcus Vance', status: 'Completed' },
-            { transaction_id: 'TXN-2026-0416', date: '2026-04-16 11:05 AM', activity: 'Consultation scheduled', record: 'Client #CL-2048', performed_by: 'Victoria Sterling', status: 'Pending' },
-            { transaction_id: 'TXN-2026-0415', date: '2026-04-15 09:28 AM', activity: 'Case status updated', record: 'Doe vs. Enterprise', performed_by: 'Marcus Vance', status: 'Completed' }
+          const databaseActivity = [
+            ...timeEntries
+              .filter((entry) => userRole === 'admin' || String(entry.user_id) === String(currentUser.userId))
+              .map((entry) => ({
+                transaction_id: `TIME-${entry.time_entry_id}`,
+                date: entry.date_logged,
+                activity: `Billable hours logged (${Number(entry.hours).toFixed(2)} hrs)`,
+                record: entry.case_title || entry.case_number || 'Case',
+                performed_by: entry.logged_by || currentUser.name,
+                status: 'Completed'
+              }))
           ];
+          const transactionHistory = [
+            ...activityHistory.filter((entry) => entry.status !== 'Viewed').map((entry) => ({
+              transaction_id: entry.activity_id,
+              date: entry.date,
+              activity: entry.activity,
+              record: entry.record,
+              performed_by: entry.performed_by,
+              status: entry.status
+            })),
+            ...databaseActivity
+          ].sort((first, second) => Date.parse(second.date) - Date.parse(first.date)).slice(0, 100);
 
           const searchableRecords = [
             ...usersList.map((user) => ({
@@ -123,17 +237,22 @@ const currentUser = window.ADMIN_USER;
             if (window.lucide) {
               window.lucide.createIcons();
             }
-          }, [userRole, activeTab, menuOpen, reviewDocuments, appointmentRequests, notificationsOpen, notifications, timeEntryModalOpen, timeEntries]);
+          }, [userRole, activeTab, menuOpen, reviewDocuments, appointmentRequests, notificationsOpen, notifications, timeEntryModalOpen, timeEntries, selectedTheme]);
 
           useEffect(() => {
-            const syncDocumentSubmissions = (event) => {
-              if (event.key === DOCUMENT_REVIEW_KEY) {
-                setReviewDocuments(readDocumentSubmissions());
-              }
-            };
-            window.addEventListener('storage', syncDocumentSubmissions);
-            return () => window.removeEventListener('storage', syncDocumentSubmissions);
-          }, []);
+            document.documentElement.dataset.adminTheme = selectedTheme;
+          }, [selectedTheme]);
+
+          const selectTheme = (themeId) => {
+            if (!ADMIN_THEMES.some((theme) => theme.id === themeId)) return;
+            setThemePreference((current) => ({ ...current, theme: themeId, storageError: false }));
+            try {
+              window.localStorage.setItem(ADMIN_THEME_STORAGE_KEY, themeId);
+            } catch (error) {
+              console.error('Unable to save the portal theme preference.', error);
+              setThemePreference((current) => ({ ...current, theme: themeId, storageError: true }));
+            }
+          };
 
           useEffect(() => {
             const syncAppointments = (event) => {
@@ -172,15 +291,55 @@ const currentUser = window.ADMIN_USER;
           }, [timeEntryModalOpen]);
 
           useEffect(() => {
+            if (searchOpen) searchInputRef.current?.focus();
+          }, [searchOpen]);
+
+          useEffect(() => {
+            if (!menuOpen || userRole !== 'lawyer') return undefined;
+            const closeProfileMenu = (event) => {
+              const isEscape = event.type === 'keydown' && event.key === 'Escape';
+              const isOutsideClick = event.type === 'pointerdown' && !profileMenuRef.current?.contains(event.target);
+              if (isEscape || isOutsideClick) {
+                setMenuOpen(false);
+              }
+            };
+            document.addEventListener('pointerdown', closeProfileMenu);
+            window.addEventListener('keydown', closeProfileMenu);
+            return () => {
+              document.removeEventListener('pointerdown', closeProfileMenu);
+              window.removeEventListener('keydown', closeProfileMenu);
+            };
+          }, [menuOpen, userRole]);
+
+          useEffect(() => {
             const handleSearchShortcut = (event) => {
               if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
                 event.preventDefault();
-                searchInputRef.current?.focus();
+                setSearchOpen(true);
+                if (searchOpen) searchInputRef.current?.focus();
               }
             };
             window.addEventListener('keydown', handleSearchShortcut);
             return () => window.removeEventListener('keydown', handleSearchShortcut);
-          }, []);
+          }, [searchOpen]);
+
+          useEffect(() => {
+            if (!searchOpen) return undefined;
+            const closeSearchOnEscape = (event) => {
+              if (event.key === 'Escape') setSearchOpen(false);
+            };
+            window.addEventListener('keydown', closeSearchOnEscape);
+            return () => window.removeEventListener('keydown', closeSearchOnEscape);
+          }, [searchOpen]);
+
+          useEffect(() => {
+            if (!searchOpen) return undefined;
+            const closeSearchOnOutsideClick = (event) => {
+              if (!searchContainerRef.current?.contains(event.target)) setSearchOpen(false);
+            };
+            document.addEventListener('pointerdown', closeSearchOnOutsideClick);
+            return () => document.removeEventListener('pointerdown', closeSearchOnOutsideClick);
+          }, [searchOpen]);
 
           useEffect(() => {
             if (!selectedReviewDocumentId) return undefined;
@@ -319,76 +478,17 @@ const currentUser = window.ADMIN_USER;
             setAppointmentDecisionError('');
           };
 
-          const handleDocumentReview = (documentId, status, comment = '') => {
-            const submissions = readDocumentSubmissions();
-            const documentIndex = submissions.findIndex((doc) => doc.document_id === documentId);
-            if (documentIndex < 0) {
-              setReviewDocuments(submissions);
-              window.alert('This document is no longer available in browser storage. The review list has been refreshed.');
-              return false;
-            }
-
-            const reviewComment = String(comment).trim();
-            if (status === 'Declined' && !reviewComment) {
-              setDeclineError('Add a comment explaining why the document is declined.');
-              return false;
-            }
-            const updatedDocument = {
-              ...submissions[documentIndex],
-              review_status: status,
-              review_comment: reviewComment,
-              reviewed_by: userRole === 'admin' ? 'Victoria Sterling' : 'Marcus Vance',
-              reviewed_at: new Date().toISOString()
-            };
-            const updatedSubmissions = submissions.map((doc, index) => index === documentIndex ? updatedDocument : doc);
-
-            try {
-              window.localStorage.setItem(DOCUMENT_REVIEW_KEY, JSON.stringify(updatedSubmissions));
-              setReviewDocuments(updatedSubmissions);
-              addNotification({
-                audience: 'staff',
-                type: 'document-review',
-                title: `Document ${status.toLowerCase()}`,
-                message: `${updatedDocument.document_name} — ${updatedDocument.case_title}${reviewComment ? `: ${reviewComment}` : ''}`,
-                tab: 'documents'
-              });
-              setSelectedReviewDocumentId(null);
-              setDeclineMode(false);
-              setDeclineComment('');
-              setDeclineError('');
-              return true;
-            } catch (error) {
-              console.error('Unable to save the attorney document review.', error);
-              window.alert('Unable to save the review. Please check browser storage and try again.');
-              return false;
-            }
-          };
-
           const openDocumentReview = (doc) => {
             setSelectedReviewDocumentId(doc.document_id);
             setDeclineMode(false);
             setDeclineComment('');
-            setDeclineError('');
+            recordAccountActivity('Opened Review File', `${doc.document_name} · ${doc.case_title}`, 'Opened');
           };
 
           const closeDocumentReview = () => {
             setSelectedReviewDocumentId(null);
             setDeclineMode(false);
             setDeclineComment('');
-            setDeclineError('');
-          };
-
-          const handlePrintReviewedDocument = (doc) => {
-            if (doc.review_status !== 'Approved' || !doc.file_data_url) return;
-            const printWindow = window.open(doc.file_data_url, '_blank');
-            if (!printWindow) {
-              window.alert('Allow pop-ups for this site to print the confidential reviewed document.');
-              return;
-            }
-            printWindow.addEventListener('load', () => {
-              printWindow.focus();
-              printWindow.print();
-            }, { once: true });
           };
 
           // --- DASHBOARD VIEW ---
@@ -396,18 +496,8 @@ const currentUser = window.ADMIN_USER;
             <div className="min-h-screen bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-blue-950 via-[#030712] to-black text-slate-100 flex flex-col">
               
               {/* Header with navigation, branding, and search */}
-              <header className="bg-slate-900/90 backdrop-blur-md border-b border-amber-500/20 px-6 py-4 flex flex-wrap items-center gap-4 shadow-lg sticky top-0 z-50">
+              <header className="bg-slate-900/90 backdrop-blur-md border-b border-amber-500/20 px-6 py-4 flex flex-wrap items-center gap-4 shadow-lg sticky top-0 z-50 xl:grid xl:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]">
                 <div className="flex min-w-0 flex-row flex-wrap items-center gap-4">
-                  <button
-                    type="button"
-                    aria-label="Open navigation menu"
-                    aria-expanded={menuOpen}
-                    aria-controls="admin-navigation-drawer"
-                    onClick={() => setMenuOpen(!menuOpen)}
-                    className="inline-flex shrink-0 items-center gap-2 rounded-lg border border-slate-700 bg-slate-950/70 px-3 py-2 text-sm text-slate-200 transition hover:border-amber-500/50 hover:text-white">
-                    <i data-lucide="menu" className="h-4 w-4 text-amber-400"></i>
-                    
-                  </button>
                   <button
                     type="button"
                     onClick={() => window.location.reload()}
@@ -418,44 +508,80 @@ const currentUser = window.ADMIN_USER;
                     </div>
                     <div>
                       <span className="font-bold text-lg tracking-wide text-white">Law Office Management System</span>
-                      <span className="block text-xs text-amber-400 font-semibold tracking-wider">ADMIN & ATTORNEY DASHBOARD</span>
+                      <span className="block text-xs text-amber-400 font-semibold tracking-wider">{userRole === 'admin' ? 'ADMIN DASHBOARD' : 'ATTORNEY WORKSPACE'}</span>
                     </div>
                   </button>
                 </div>
-                <div className="relative z-20 flex w-full min-w-0 items-center gap-3 md:ml-auto md:w-[min(38rem,48vw)]">
-                  <div className="relative min-w-0 flex-1">
-                  <div className="flex items-center gap-3 rounded-xl border border-slate-700 bg-slate-950/80 px-4 py-3 shadow-lg transition focus-within:border-amber-500/60 focus-within:ring-1 focus-within:ring-amber-500/30">
-                    <i data-lucide="search" className="h-5 w-5 shrink-0 text-amber-400"></i>
-                    <input
-                      ref={searchInputRef}
-                      type="search"
-                      value={searchQuery}
-                      onChange={(event) => setSearchQuery(event.target.value)}
-                      placeholder="Search clients, cases, documents, case numbers, or dates..."
-                      aria-label="Search clients, cases, court dates, documents, time entries, and users"
-                      aria-controls="admin-search-results"
-                      className="min-w-0 flex-1 bg-transparent text-sm text-white outline-none placeholder:text-slate-500"
-                    />
-                    <span className="hidden shrink-0 rounded border border-slate-700 bg-[#262626] px-2 py-1 text-[11px] text-[#d4af37] sm:inline">Ctrl K</span>
-                  </div>
-                  {searchTokens.length > 0 && (
-                    <div id="admin-search-results" className="absolute left-0 right-0 top-full mt-2 max-h-72 overflow-y-auto rounded-xl border border-slate-700 bg-slate-950 p-2 shadow-2xl">
-                      {searchResults.length ? searchResults.map((result) => (
-                        <button
-                          key={result.id}
-                          type="button"
-                          onClick={() => { setUserRole(result.role); setActiveTab(result.tab); }}
-                          className="flex w-full items-center justify-between gap-4 rounded-lg px-3 py-2.5 text-left transition hover:bg-slate-800"
-                        >
-                          <span className="min-w-0">
-                            <span className="block truncate text-sm font-medium text-white">{result.title}</span>
-                            <span className="block truncate text-xs text-slate-400">{result.details}</span>
-                          </span>
-                          <span className="shrink-0 text-[11px] text-amber-400">{result.type}</span>
-                        </button>
-                      )) : <p className="px-3 py-4 text-sm text-slate-400">No matching records found.</p>}
+                {userRole === 'lawyer' && (
+                  <nav aria-label="Attorney dashboard" className="flex flex-wrap items-center gap-1 xl:col-start-2 xl:justify-self-center">
+                    {[
+                      { tab: 'overview', label: 'Overview' },
+                      { tab: 'cases', label: 'Cases' },
+                      { tab: 'schedule', label: 'Court Calendar' },
+                      { tab: 'hours', label: 'Billable Hours' }
+                    ].map((item) => (
+                      <button
+                        key={item.tab}
+                        type="button"
+                        onClick={() => setActiveTab(item.tab)}
+                        aria-current={activeTab === item.tab ? 'page' : undefined}
+                        className={`rounded-lg px-4 py-2 text-sm font-medium transition ${activeTab === item.tab ? 'bg-amber-500/10 text-amber-300' : 'text-slate-300 hover:bg-slate-800 hover:text-white'}`}
+                      >
+                        {item.label}
+                      </button>
+                    ))}
+                  </nav>
+                )}
+                <div className="relative z-20 ml-auto flex shrink-0 items-center gap-3 xl:col-start-3 xl:ml-0 xl:justify-self-end">
+                  <div ref={searchContainerRef} className="relative shrink-0">
+                    <button
+                      type="button"
+                      aria-label={searchOpen ? 'Close search' : 'Open search'}
+                      aria-expanded={searchOpen}
+                      aria-controls="admin-search-panel"
+                      onClick={() => setSearchOpen((open) => !open)}
+                      className="inline-flex h-12 w-12 items-center justify-center rounded-xl border border-slate-700 bg-slate-950/80 text-amber-400 shadow-lg transition hover:border-amber-500/60 hover:bg-slate-900"
+                    >
+                      <i data-lucide={searchOpen ? 'x' : 'search'} className="h-5 w-5"></i>
+                    </button>
+                    <div
+                    id="admin-search-panel"
+                    aria-hidden={!searchOpen}
+                    className={`absolute right-full top-1/2 mr-3 w-[min(24rem,calc(100vw-10rem))] -translate-y-1/2 transition-[opacity,transform,visibility] duration-200 ease-out ${searchOpen ? 'visible translate-x-0 opacity-100' : 'invisible translate-x-4 opacity-0 pointer-events-none'}`}
+                  >
+                    <div className="flex items-center gap-3 rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 shadow-lg transition focus-within:border-amber-500/60 focus-within:ring-1 focus-within:ring-amber-500/30">
+                      <i data-lucide="search" className="h-5 w-5 shrink-0 text-amber-400"></i>
+                      <input
+                        ref={searchInputRef}
+                        type="search"
+                        value={searchQuery}
+                        onChange={(event) => setSearchQuery(event.target.value)}
+                        placeholder="Search clients, cases, documents, case numbers, or dates..."
+                        aria-label="Search clients, cases, court dates, documents, time entries, and users"
+                        aria-controls="admin-search-results"
+                        className="min-w-0 flex-1 bg-transparent text-sm text-white outline-none placeholder:text-slate-500"
+                      />
+                      <span className="hidden shrink-0 rounded border border-slate-700 bg-[#262626] px-2 py-1 text-[11px] text-[#d4af37] sm:inline">Ctrl K</span>
                     </div>
-                  )}
+                    {searchTokens.length > 0 && (
+                      <div id="admin-search-results" className="mt-2 max-h-72 overflow-y-auto rounded-xl border border-slate-700 bg-slate-950 p-2 shadow-2xl">
+                        {searchResults.length ? searchResults.map((result) => (
+                          <button
+                            key={result.id}
+                            type="button"
+                            onClick={() => { setUserRole(result.role); setActiveTab(result.tab); setSearchOpen(false); }}
+                            className="flex w-full items-center justify-between gap-4 rounded-lg px-3 py-2.5 text-left transition hover:bg-slate-800"
+                          >
+                            <span className="min-w-0">
+                              <span className="block truncate text-sm font-medium text-white">{result.title}</span>
+                              <span className="block truncate text-xs text-slate-400">{result.details}</span>
+                            </span>
+                            <span className="shrink-0 text-[11px] text-amber-400">{result.type}</span>
+                          </button>
+                        )) : <p className="px-3 py-4 text-sm text-slate-400">No matching records found.</p>}
+                      </div>
+                    )}
+                  </div>
                   </div>
                   <div className="relative shrink-0">
                     <button
@@ -494,10 +620,91 @@ const currentUser = window.ADMIN_USER;
                       </div>
                     )}
                   </div>
+                  <div ref={profileMenuRef} className="relative shrink-0">
+                    <button
+                      type="button"
+                      aria-label={userRole === 'lawyer' ? 'Open profile menu' : 'Open navigation menu'}
+                      aria-expanded={menuOpen}
+                      aria-controls={userRole === 'lawyer' ? 'attorney-profile-menu' : 'admin-navigation-drawer'}
+                      onClick={() => setMenuOpen(!menuOpen)}
+                      className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-full border border-amber-500/60 bg-amber-500/5 text-amber-400 shadow-lg transition hover:bg-amber-500/10"
+                    >
+                      <i data-lucide="user-round" className="h-5 w-5"></i>
+                    </button>
+                    {userRole === 'lawyer' && menuOpen && (
+                      <section
+                        id="attorney-profile-menu"
+                        aria-label="Attorney profile menu"
+                        className="absolute right-0 top-full z-[60] mt-3 flex h-[calc(100dvh-8rem)] min-h-[320px] max-h-[36rem] w-[min(20rem,calc(100vw-2rem))] flex-col overflow-hidden rounded-xl border border-slate-700 bg-slate-950 text-left shadow-2xl"
+                      >
+                        <div className="flex items-center gap-3 border-b border-slate-800 px-4 py-4">
+                          <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-amber-500/60 bg-slate-900 text-amber-400">
+                            <i data-lucide="user-round" className="h-5 w-5"></i>
+                          </span>
+                          <span className="min-w-0">
+                            <span className="block truncate text-sm font-semibold text-white">{currentUser.name}</span>
+                            <span className="block text-xs text-amber-400">{currentUser.roleLabel}</span>
+                            <span className="block truncate text-[11px] text-slate-400">{currentUser.email}</span>
+                          </span>
+                        </div>
+                        <nav className="flex-1 space-y-1 overflow-y-auto p-2" aria-label="Attorney navigation">
+                          {[
+                            { tab: 'overview', label: 'Overview', icon: 'layout-dashboard' },
+                            { tab: 'cases', label: 'My Cases', icon: 'briefcase-business' },
+                            { tab: 'schedule', label: 'Court Calendar', icon: 'calendar-days' },
+                            { tab: 'hours', label: 'Billable Hours', icon: 'clock-3' },
+                            { tab: 'transactions', label: 'Transaction History & Tracking', icon: 'history' },
+                            { tab: 'document-review', label: 'Review File', icon: 'file-check-2' }
+                          ].map((item) => (
+                            <button
+                              key={item.tab}
+                              type="button"
+                              aria-current={activeTab === item.tab ? 'page' : undefined}
+                              onClick={() => { setActiveTab(item.tab); setMenuOpen(false); }}
+                              className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm transition ${activeTab === item.tab ? 'bg-amber-500/15 text-amber-300' : 'text-slate-300 hover:bg-slate-800 hover:text-white'}`}
+                            >
+                              <i data-lucide={item.icon} className="h-4 w-4 shrink-0"></i>
+                              <span>{item.label}</span>
+                            </button>
+                          ))}
+                        </nav>
+                        <div className="space-y-1 border-t border-slate-800 p-2">
+                          <button
+                            type="button"
+                            aria-current={activeTab === 'account-settings' ? 'page' : undefined}
+                            onClick={() => { setActiveTab('account-settings'); setMenuOpen(false); }}
+                            className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm transition ${activeTab === 'account-settings' ? 'bg-amber-500/15 text-amber-300' : 'text-slate-300 hover:bg-slate-800 hover:text-white'}`}
+                          >
+                            <AttorneyMenuIcon name="settings" />
+                            <span>Account Settings</span>
+                          </button>
+                          <button
+                            type="button"
+                            aria-current={activeTab === 'customization' ? 'page' : undefined}
+                            onClick={() => { setActiveTab('customization'); setMenuOpen(false); }}
+                            className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm transition ${activeTab === 'customization' ? 'bg-amber-500/15 text-amber-300' : 'text-slate-300 hover:bg-slate-800 hover:text-white'}`}
+                          >
+                            <AttorneyMenuIcon name="paintbrush" />
+                            <span>Customization</span>
+                          </button>
+                        </div>
+                        <footer className="mt-auto border-t border-slate-800 p-3">
+                          <button
+                            type="button"
+                            onClick={handleLogout}
+                            className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm font-medium text-red-300 transition hover:bg-red-500/10 hover:text-red-200"
+                          >
+                            <i data-lucide="log-out" className="h-4 w-4"></i>
+                            Log Out
+                          </button>
+                        </footer>
+                      </section>
+                    )}
+                  </div>
                 </div>
               </header>
 
-              <div className={`fixed inset-0 z-[60] transition ${menuOpen ? 'visible' : 'invisible pointer-events-none'}`}>
+              {userRole === 'admin' && <div className={`fixed inset-0 z-[60] transition ${menuOpen ? 'visible' : 'invisible pointer-events-none'}`}>
                 <button
                   type="button"
                   aria-label="Close navigation menu"
@@ -505,11 +712,11 @@ const currentUser = window.ADMIN_USER;
                   className={`absolute inset-0 bg-black/60 transition-opacity ${menuOpen ? 'opacity-100' : 'opacity-0'}`}></button>
                 <aside
                   id="admin-navigation-drawer"
-                  aria-label="Admin navigation"
+                  aria-label={userRole === 'admin' ? 'Admin navigation' : 'Attorney navigation'}
                   aria-hidden={!menuOpen}
                   className={`absolute inset-y-0 left-0 flex w-[min(20rem,88vw)] flex-col border-r border-amber-500/20 bg-slate-950 shadow-2xl transition-transform duration-300 ${menuOpen ? 'translate-x-0' : '-translate-x-full'}`}>
                   <div className="flex items-center justify-between border-b border-slate-800 px-5 py-4">
-                    <span className="text-sm font-semibold uppercase tracking-wider text-amber-400">Admin Menu</span>
+                    <span className="text-sm font-semibold uppercase tracking-wider text-amber-400">{userRole === 'admin' ? 'Admin Menu' : 'Attorney Menu'}</span>
                     <button type="button" aria-label="Close navigation menu" onClick={(event) => { event.currentTarget.blur(); setMenuOpen(false); }} className="rounded-lg p-2 text-slate-400 transition hover:bg-slate-800 hover:text-white">
                       <i data-lucide="x" className="h-5 w-5"></i>
                     </button>
@@ -529,6 +736,24 @@ const currentUser = window.ADMIN_USER;
                   </div>
 
                   <nav className="flex-1 space-y-2 overflow-y-auto p-3">
+                    {userRole === 'lawyer' && [
+                      { tab: 'overview', label: 'Overview', icon: 'layout-dashboard' },
+                      { tab: 'cases', label: 'My Cases', icon: 'briefcase-business' },
+                      { tab: 'schedule', label: 'Court Calendar', icon: 'calendar-days' },
+                      { tab: 'hours', label: 'Billable Hours', icon: 'clock-3' }
+                    ].map((item) => (
+                      <button
+                        key={item.tab}
+                        type="button"
+                        onClick={(event) => { event.currentTarget.blur(); setActiveTab(item.tab); setMenuOpen(false); }}
+                        className={`flex w-full items-center gap-3 rounded-lg px-3 py-3 text-left text-sm transition ${activeTab === item.tab ? 'bg-amber-500/15 text-amber-300' : 'text-slate-300 hover:bg-slate-800 hover:text-white'}`}
+                      >
+                        <i data-lucide={item.icon} className="h-5 w-5"></i>
+                        <span>{item.label}</span>
+                      </button>
+                    ))}
+                    {userRole === 'admin' && (
+                      <>
                     <button
                       type="button"
                       onClick={(event) => { event.currentTarget.blur(); setUserRole('admin'); setActiveTab('users'); setMenuOpen(false); }}
@@ -550,6 +775,8 @@ const currentUser = window.ADMIN_USER;
                       <i data-lucide="file-check-2" className="h-5 w-5"></i>
                       <span>Review File</span>
                     </button>
+                      </>
+                    )}
                   </nav>
 
                   <div className="border-t border-slate-800 p-3">
@@ -562,31 +789,219 @@ const currentUser = window.ADMIN_USER;
                     </button>
                   </div>
                 </aside>
-              </div>
+              </div>}
 
               {/* Main Workspace Area */}
-              <main className="max-w-7xl w-full mx-auto p-6 space-y-6 flex-grow">
+              <main className={`w-full mx-auto p-6 space-y-6 flex-grow ${userRole === 'lawyer' ? 'max-w-[1600px]' : 'max-w-7xl'}`}>
                 {/* Banner & Tab Navigator */}
+                {userRole === 'admin' && (
                 <div className="bg-gradient-to-r from-blue-900/40 via-slate-900/80 to-slate-900/90 border border-amber-500/30 rounded-2xl p-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 shadow-xl backdrop-blur-md">
                   <div>
                     <h2 className="text-2xl font-bold text-white tracking-wide">
-                      {userRole === 'admin' ? 'Administrator / Managing Partner Dashboard' : 'Lawyer / Attorney Workspace'}
+                      {userRole === 'admin'
+                        ? 'Administrator / Managing Partner Dashboard'
+                        : activeTab === 'overview' ? 'Attorney Dashboard' : 'Lawyer / Attorney Workspace'}
                     </h2>
                     <p className="text-slate-300 text-sm mt-1">
                       {userRole === 'admin' 
                         ? 'Manage system settings, user roles, and firm-wide reporting.' 
-                        : 'Manage assigned cases, upload legal documents, track court schedules, and log billable hours.'}
+                        : activeTab === 'overview'
+                          ? 'Your matters, court schedule, and firm activity at a glance.'
+                          : 'Manage assigned cases, review court schedules, and log billable hours.'}
                     </p>
                   </div>
 
-                  {userRole === 'lawyer' && (
-                    <div className="flex flex-wrap gap-2">
-                      <button onClick={() => setActiveTab('cases')} className={`px-4 py-2 rounded-xl text-xs font-semibold transition ${activeTab === 'cases' ? 'bg-amber-500 text-slate-950 gold-glow-sm' : 'bg-slate-800 text-slate-300 border border-slate-700'}`}>Cases</button>
-                      <button onClick={() => setActiveTab('schedule')} className={`px-4 py-2 rounded-xl text-xs font-semibold transition ${activeTab === 'schedule' ? 'bg-amber-500 text-slate-950 gold-glow-sm' : 'bg-slate-800 text-slate-300 border border-slate-700'}`}>Court Calendar</button>
-                      <button onClick={() => setActiveTab('hours')} className={`px-4 py-2 rounded-xl text-xs font-semibold transition ${activeTab === 'hours' ? 'bg-amber-500 text-slate-950 gold-glow-sm' : 'bg-slate-800 text-slate-300 border border-slate-700'}`}>Billable Hours</button>
-                    </div>
-                  )}
                 </div>
+                )}
+
+                {userRole === 'lawyer' && activeTab === 'account-settings' && (
+                  <section className="animate-fade-in overflow-hidden rounded-2xl border border-amber-500/20 bg-slate-900/80 shadow-xl">
+                    <div className="border-b border-slate-800 p-6">
+                      <div className="flex items-center gap-3">
+                        <AttorneyMenuIcon name="settings" className="h-5 w-5 shrink-0 text-amber-400" />
+                        <div>
+                          <h2 className="text-xl font-semibold text-white">Account Settings</h2>
+                          <p className="mt-1 text-sm text-slate-400">Your account information. Contact an administrator to request changes.</p>
+                        </div>
+                      </div>
+                    </div>
+                    <dl className="grid gap-4 p-6 sm:grid-cols-2">
+                      {[
+                        { label: 'Name', value: currentUser.name },
+                        { label: 'Role', value: currentUser.roleLabel },
+                        { label: 'Email', value: currentUser.email }
+                      ].map((item) => (
+                        <div key={item.label} className="rounded-xl border border-slate-800 bg-slate-950/60 p-4">
+                          <dt className="text-xs font-medium uppercase tracking-wide text-slate-400">{item.label}</dt>
+                          <dd className="mt-2 break-words text-sm font-medium text-white">{item.value}</dd>
+                        </div>
+                      ))}
+                    </dl>
+                  </section>
+                )}
+
+                {userRole === 'lawyer' && activeTab === 'customization' && (
+                  <section className="animate-fade-in overflow-hidden rounded-2xl border border-amber-500/20 bg-slate-900/80 shadow-xl">
+                    <div className="border-b border-slate-800 p-6">
+                      <div className="flex items-center gap-3">
+                        <AttorneyMenuIcon name="paintbrush" className="h-5 w-5 shrink-0 text-amber-400" />
+                        <div>
+                          <h2 className="text-xl font-semibold text-white">Customization</h2>
+                          <p className="mt-1 text-sm text-slate-400">Choose an accent palette for your Attorney workspace. Your selection is saved in this browser.</p>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="grid gap-4 p-6 md:grid-cols-3" role="radiogroup" aria-label="Accent color palette">
+                      {ADMIN_THEMES.map((theme) => (
+                        <button
+                          key={theme.id}
+                          type="button"
+                          role="radio"
+                          aria-checked={selectedTheme === theme.id}
+                          onClick={() => selectTheme(theme.id)}
+                          className={`rounded-xl border p-4 text-left transition focus:outline-none focus:ring-2 focus:ring-amber-400 ${selectedTheme === theme.id ? 'border-amber-400 bg-amber-500/10' : 'border-slate-700 bg-slate-950/50 hover:border-slate-500'}`}
+                        >
+                          <span className="flex items-center justify-between gap-3">
+                            <span className="flex items-center gap-3">
+                              <span className="h-8 w-8 rounded-full border border-white/20" style={{ backgroundColor: theme.color }}></span>
+                              <span>
+                                <span className="block text-sm font-semibold text-white">{theme.name}</span>
+                                <span className="mt-1 block text-xs text-slate-400">{theme.description}</span>
+                              </span>
+                            </span>
+                            {selectedTheme === theme.id && (
+                              <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4 shrink-0 text-amber-300">
+                                <path d="m5 12 4 4L19 6" />
+                              </svg>
+                            )}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                    {themePreference.storageError && (
+                      <p className="px-6 pb-6 text-sm text-amber-200" role="status">
+                        This palette is active for this visit, but the browser couldn’t save it for your next visit.
+                      </p>
+                    )}
+                  </section>
+                )}
+
+                {userRole === 'lawyer' && activeTab === 'overview' && (
+                  <div className="animate-fade-in">
+                    <div className="min-w-0 space-y-6">
+                      <div className="grid gap-5 lg:grid-cols-[minmax(15rem,0.8fr)_minmax(0,1.8fr)]">
+                        <section className="rounded-2xl border border-slate-800 bg-slate-900/80 p-5 shadow-xl">
+                          <div className="mb-5 flex items-start justify-between gap-3">
+                            <div>
+                              <h3 className="font-semibold text-white">Assigned Case Status</h3>
+                              <p className="mt-1 text-xs text-slate-400">{assignedCases.length} assigned matters</p>
+                            </div>
+                            <i data-lucide="briefcase-business" className="h-5 w-5 text-amber-400"></i>
+                          </div>
+                          <div className="space-y-4">
+                            {caseStatusSummary.map((item) => (
+                              <div key={item.status}>
+                                <div className="mb-1.5 flex items-center justify-between text-xs">
+                                  <span className="text-slate-300">{item.status}</span>
+                                  <span className="font-semibold text-white">{item.count}</span>
+                                </div>
+                                <div className="h-2 overflow-hidden rounded-full bg-slate-800">
+                                  <div
+                                    className={`h-full rounded-full ${item.status === 'Active' ? 'bg-emerald-400' : item.status === 'Pending' ? 'bg-amber-400' : item.status === 'Closed' ? 'bg-sky-400' : 'bg-slate-500'}`}
+                                    style={{ width: `${(item.count / maxCaseStatusCount) * 100}%` }}
+                                  ></div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </section>
+
+                        <section className="rounded-2xl border border-slate-800 bg-slate-900/80 p-5 shadow-xl">
+                          <div className="mb-3 flex items-start justify-between gap-3">
+                            <div>
+                              <h3 className="font-semibold text-white">Billable Hours</h3>
+                              <p className="mt-1 text-xs text-slate-400">Monthly hours · last six months</p>
+                            </div>
+                            <span className="rounded-lg bg-amber-500/10 px-3 py-1.5 text-sm font-bold text-amber-300">{firmReporting.totalBillableHoursYTD}</span>
+                          </div>
+                          <svg viewBox="0 0 600 180" role="img" aria-label="Monthly billable hours for the last six months" className="h-44 w-full overflow-visible">
+                            {[30, 70, 110, 150].map((y) => (
+                              <line key={y} x1="20" y1={y} x2="580" y2={y} stroke="#263248" strokeDasharray="4 6"></line>
+                            ))}
+                            <polyline points={billableChartPoints} fill="none" stroke="var(--admin-accent-500)" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"></polyline>
+                            {billableMonthSummary.map((month, index) => {
+                              const x = 20 + index * 112;
+                              const y = 150 - (month.hours / maxMonthlyHours) * 120;
+                              return (
+                                <g key={`${month.label}-${index}`}>
+                                  <circle cx={x} cy={y} r="5" fill="var(--admin-accent-500)" stroke="#0f172a" strokeWidth="3">
+                                    <title>{month.label}: {month.hours.toFixed(2)} hours</title>
+                                  </circle>
+                                  <text x={x} y="174" textAnchor="middle" fill="#94a3b8" fontSize="12">{month.label}</text>
+                                </g>
+                              );
+                            })}
+                          </svg>
+                        </section>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+                        {[
+                          { label: 'Firm Legal Cases', value: firmReporting.totalCases, icon: 'scale', color: 'text-amber-300' },
+                          { label: 'Pending Appointments', value: firmReporting.pendingAppointments, icon: 'calendar-clock', color: 'text-sky-300' },
+                          { label: 'Billable Hours YTD', value: firmReporting.totalBillableHoursYTD, icon: 'clock-3', color: 'text-emerald-300' },
+                          { label: 'Total Clients', value: firmReporting.totalClients, icon: 'users-round', color: 'text-violet-300' }
+                        ].map((metric) => (
+                          <section key={metric.label} className="flex min-h-36 flex-col rounded-2xl border border-slate-800 bg-slate-900/80 p-4 shadow-lg">
+                            <p className="text-left text-xs font-medium text-slate-400">{metric.label}</p>
+                            <div className="flex flex-1 items-center justify-center">
+                              <p className="truncate text-2xl font-bold text-white">{metric.value}</p>
+                            </div>
+                          </section>
+                        ))}
+                      </div>
+
+                      <section className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/80 shadow-xl">
+                        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 p-5">
+                          <div>
+                            <h3 className="font-bold text-white">Assigned Legal Cases</h3>
+                            <p className="mt-1 text-xs text-slate-400">Recently filed matters assigned to the legal team</p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => alert('Opening Document Upload Modal')}
+                            className="inline-flex items-center gap-2 rounded-lg bg-amber-500 px-4 py-2.5 text-sm font-semibold text-slate-950 transition hover:bg-amber-400"
+                          >
+                            <i data-lucide="upload" className="h-4 w-4"></i>
+                            Upload Legal Document
+                          </button>
+                        </div>
+                        <div className="overflow-x-auto">
+                          <table className="w-full min-w-[620px] text-left text-sm text-slate-300">
+                            <thead className="bg-slate-950/60 text-xs uppercase tracking-wide text-amber-400">
+                              <tr><th className="px-5 py-3">Case #</th><th className="px-5 py-3">Title</th><th className="px-5 py-3">Status</th><th className="px-5 py-3">Filed Date</th></tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-800/80">
+                              {assignedCases.filter(matchesSearch).slice(0, 5).map((legalCase) => (
+                                <tr key={legalCase.case_id} className="transition hover:bg-slate-800/40">
+                                  <td className="whitespace-nowrap px-5 py-4 font-mono text-amber-300">{legalCase.case_number}</td>
+                                  <td className="px-5 py-4 font-medium text-white">{legalCase.title}</td>
+                                  <td className="px-5 py-4">
+                                    <span className="rounded-full bg-slate-800 px-2.5 py-1 text-xs text-slate-200">{legalCase.status}</span>
+                                  </td>
+                                  <td className="whitespace-nowrap px-5 py-4 text-slate-400">{legalCase.filed_date}</td>
+                                </tr>
+                              ))}
+                              {assignedCases.filter(matchesSearch).length === 0 && (
+                                <tr><td colSpan="4" className="px-5 py-8 text-center text-slate-400">{assignedCases.length === 0 ? 'No assigned legal cases found.' : 'No matching cases.'}</td></tr>
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
+                      </section>
+                    </div>
+                  </div>
+                )}
 
                 {/* --- ADMIN VIEWS --- */}
                 {userRole === 'admin' && activeTab === 'overview' && (
@@ -789,30 +1204,43 @@ const currentUser = window.ADMIN_USER;
                   </section>
                 )}
 
-                {userRole === 'admin' && activeTab === 'transactions' && (
+                        {(userRole === 'admin' || userRole === 'lawyer') && activeTab === 'transactions' && (
                   <section className="bg-slate-900/80 border border-amber-500/20 rounded-2xl overflow-hidden shadow-xl animate-fade-in">
                     <div className="border-b border-slate-800 p-5">
                       <h3 className="font-bold text-white text-base">Transaction History & Tracking</h3>
-                      <p className="mt-1 text-sm text-slate-400">Review activity, linked records, responsible staff, and transaction status.</p>
+                      <p className="mt-1 text-sm text-slate-400">See your latest meaningful account actions, document reviews, and billable-hour entries.</p>
+                      <p className="mt-2 text-xs text-amber-300">Document activity is saved in this browser for this account. Billable-hour entries come from the database.</p>
                     </div>
+                    {activityStorageError && (
+                      <p role="status" className="border-b border-amber-500/20 bg-amber-500/5 px-5 py-3 text-sm text-amber-200">
+                        Browser storage could not save or load portal activity. Database activity is still shown when available.
+                      </p>
+                    )}
+                    {transactionHistory[0] && (
+                      <div className="border-b border-slate-800 p-5">
+                        <p className="text-xs font-semibold uppercase tracking-wider text-amber-400">Last Activity</p>
+                        <p className="mt-2 text-sm font-semibold text-white">{transactionHistory[0].activity}</p>
+                        <p className="mt-1 text-sm text-slate-400">{transactionHistory[0].record} · {new Date(transactionHistory[0].date).toLocaleString()}</p>
+                      </div>
+                    )}
                     <div className="overflow-x-auto">
                       <table className="w-full min-w-[760px] text-left text-sm text-slate-300">
                         <thead className="bg-slate-950/60 text-amber-400/80 uppercase text-xs">
-                          <tr><th className="p-4">Transaction ID</th><th className="p-4">Date & Time</th><th className="p-4">Activity</th><th className="p-4">Related Record</th><th className="p-4">Performed By</th><th className="p-4">Status</th></tr>
+                          <tr><th className="p-4">Activity ID</th><th className="p-4">Date & Time</th><th className="p-4">Activity</th><th className="p-4">Related Record</th><th className="p-4">Performed By</th><th className="p-4">Status</th></tr>
                         </thead>
                         <tbody className="divide-y divide-slate-800/60">
                           {transactionHistory.filter(matchesSearch).map(transaction => (
                             <tr key={transaction.transaction_id} className="hover:bg-slate-800/40">
                               <td className="p-4 font-mono text-amber-300">{transaction.transaction_id}</td>
-                              <td className="p-4 whitespace-nowrap text-slate-400">{transaction.date}</td>
+                              <td className="p-4 whitespace-nowrap text-slate-400">{new Date(transaction.date).toLocaleString()}</td>
                               <td className="p-4 font-semibold text-white">{transaction.activity}</td>
                               <td className="p-4">{transaction.record}</td>
                               <td className="p-4">{transaction.performed_by}</td>
-                              <td className="p-4"><span className={`rounded-full px-2.5 py-1 text-xs ${transaction.status === 'Completed' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-amber-500/10 text-amber-300'}`}>{transaction.status}</span></td>
+                              <td className="p-4"><span className={`rounded-full px-2.5 py-1 text-xs ${transaction.status === 'Completed' ? 'bg-emerald-500/10 text-emerald-400' : transaction.status === 'Viewed' ? 'bg-sky-500/10 text-sky-300' : 'bg-amber-500/10 text-amber-300'}`}>{transaction.status}</span></td>
                             </tr>
                           ))}
                           {transactionHistory.filter(matchesSearch).length === 0 && (
-                            <tr><td colSpan="6" className="p-6 text-center text-slate-400">No matching transactions.</td></tr>
+                            <tr><td colSpan="6" className="p-6 text-center text-slate-400">{searchTokens.length ? 'No matching activity.' : 'No activity has been tracked for this account yet.'}</td></tr>
                           )}
                         </tbody>
                       </table>
@@ -828,7 +1256,11 @@ const currentUser = window.ADMIN_USER;
                         <h3 className="font-bold text-white text-base">Review File</h3>
                       </div>
                       <p className="mt-1 text-sm text-slate-400">Open a submitted document to review its contents. Approve it or decline it with a comment.</p>
-                      <p className="mt-2 text-xs text-amber-300">Demo limitation: files and reviews sync only in this browser. Browser storage is not secure storage for real confidential records.</p>
+                      {window.ADMIN_DOCUMENT_REVIEW_NOTICE && (
+                        <p role={window.ADMIN_DOCUMENT_REVIEW_NOTICE.type === 'error' ? 'alert' : 'status'} className={`mt-3 text-sm ${window.ADMIN_DOCUMENT_REVIEW_NOTICE.type === 'error' ? 'text-red-300' : 'text-emerald-300'}`}>
+                          {window.ADMIN_DOCUMENT_REVIEW_NOTICE.message}
+                        </p>
+                      )}
                     </div>
                     <div className="overflow-x-auto">
                       <table className="w-full min-w-[900px] text-left text-sm text-slate-300">
@@ -844,6 +1276,7 @@ const currentUser = window.ADMIN_USER;
                         </thead>
                         <tbody className="divide-y divide-slate-800/60">
                           {reviewDocuments.filter((doc) => matchesSearch({
+                            case_number: doc.case_number,
                             case_title: doc.case_title,
                             document_name: doc.document_name,
                             upload_date: doc.upload_date,
@@ -853,7 +1286,7 @@ const currentUser = window.ADMIN_USER;
                           })).map((doc) => (
                             <tr key={doc.document_id} className="hover:bg-slate-800/40">
                               <td className="p-4 font-semibold text-white">{doc.document_name}</td>
-                              <td className="p-4 text-slate-300">{doc.case_title}</td>
+                              <td className="p-4 text-slate-300">{doc.case_number} · {doc.case_title}</td>
                               <td className="p-4 text-slate-300">{doc.uploaded_by}</td>
                               <td className="whitespace-nowrap p-4 text-slate-400">{doc.upload_date}</td>
                               <td className="p-4">
@@ -872,12 +1305,13 @@ const currentUser = window.ADMIN_USER;
                                   onClick={() => openDocumentReview(doc)}
                                   className="inline-flex items-center gap-1 rounded-lg bg-amber-500/10 px-3 py-1.5 text-xs font-semibold text-amber-300 transition hover:bg-amber-500 hover:text-slate-950"
                                 >
-                                  <i data-lucide="file-search" className="h-3.5 w-3.5"></i> Review File
+                                  <i data-lucide="file-search" className="h-3.5 w-3.5"></i> {doc.review_status === 'Pending Review' ? 'Review File' : 'View Review'}
                                 </button>
                               </td>
                             </tr>
                           ))}
                           {reviewDocuments.filter((doc) => matchesSearch({
+                            case_number: doc.case_number,
                             case_title: doc.case_title,
                             document_name: doc.document_name,
                             upload_date: doc.upload_date,
@@ -897,7 +1331,7 @@ const currentUser = window.ADMIN_USER;
                   const doc = reviewDocuments.find((item) => item.document_id === selectedReviewDocumentId);
                   if (!doc) return null;
                   const isPending = !doc.review_status || doc.review_status === 'Pending Review';
-                  const canPreview = doc.file_type === 'application/pdf' || doc.file_type?.startsWith('image/') || doc.file_type?.startsWith('text/');
+                  const canPreview = doc.previewable;
                   return (
                     <div
                       className="fixed inset-0 z-[70] flex items-center justify-center overflow-y-auto bg-black/70 p-4 backdrop-blur-sm"
@@ -938,35 +1372,32 @@ const currentUser = window.ADMIN_USER;
                             }`}>{doc.review_status === 'Rejected' ? 'Declined' : doc.review_status || 'Pending Review'}</span>
                           </div>
 
-                          {doc.file_data_url && canPreview ? (
+                          {canPreview ? (
                             <iframe
                               title={`Document preview: ${doc.document_name}`}
-                              src={doc.file_data_url}
+                              src={doc.file_url}
                               className="h-[60vh] w-full rounded-xl border border-slate-700 bg-white"
                             />
-                          ) : doc.file_data_url ? (
+                          ) : (
                             <div className="flex min-h-56 flex-col items-center justify-center gap-4 rounded-xl border border-dashed border-slate-700 bg-slate-950/70 p-6 text-center">
                               <i data-lucide="file-text" className="h-10 w-10 text-amber-400"></i>
-                              <p className="text-sm text-slate-300">Preview is unavailable for this file type. Open the original file to review it.</p>
+                              <p className="text-sm text-slate-300">This file type cannot be previewed here. Download the original file to review it.</p>
                               <a
-                                href={doc.file_data_url}
-                                target="_blank"
-                                rel="noreferrer"
+                                href={doc.download_url}
                                 className="rounded-lg bg-amber-500/10 px-4 py-2 text-sm font-semibold text-amber-300 transition hover:bg-amber-500 hover:text-slate-950"
                               >
-                                Open Document
+                                Download Document
                               </a>
-                            </div>
-                          ) : (
-                            <div className="flex min-h-56 items-center justify-center rounded-xl border border-dashed border-slate-700 bg-slate-950/70 p-6 text-sm text-slate-400">
-                              The original file is not available to preview.
                             </div>
                           )}
 
                           {doc.review_comment && !isPending && (
                             <div className="rounded-xl border border-slate-700 bg-slate-950/70 p-4">
-                              <p className="text-xs font-semibold uppercase tracking-wide text-amber-400">Attorney Comment</p>
+                              <p className="text-xs font-semibold uppercase tracking-wide text-amber-400">Review Comment</p>
                               <p className="mt-2 whitespace-pre-wrap text-sm text-slate-300">{doc.review_comment}</p>
+                              <p className="mt-2 text-xs text-slate-500">
+                                Reviewed by {doc.reviewed_by || 'Attorney'}{doc.reviewed_at ? ` on ${doc.reviewed_at}` : ''}
+                              </p>
                             </div>
                           )}
 
@@ -974,67 +1405,67 @@ const currentUser = window.ADMIN_USER;
                             <div className="space-y-4 border-t border-slate-800 pt-4">
                               {!declineMode ? (
                                 <div className="flex flex-wrap justify-end gap-3">
+                                  <form method="post" action="index.php?tab=document-review" className="inline-flex">
+                                    <input type="hidden" name="action" value="review_document" />
+                                    <input type="hidden" name="_csrf" value={window.ADMIN_DOCUMENT_REVIEW_CSRF_TOKEN} />
+                                    <input type="hidden" name="document_id" value={doc.document_id} />
+                                    <input type="hidden" name="review_status" value="Approved" />
+                                    <button
+                                      type="submit"
+                                      className="rounded-lg bg-emerald-500/10 px-4 py-2 text-sm font-semibold text-emerald-300 transition hover:bg-emerald-500 hover:text-slate-950"
+                                    >
+                                      Approve
+                                    </button>
+                                  </form>
                                   <button
                                     type="button"
-                                    onClick={() => handleDocumentReview(doc.document_id, 'Approved')}
-                                    className="rounded-lg bg-emerald-500/10 px-4 py-2 text-sm font-semibold text-emerald-300 transition hover:bg-emerald-500 hover:text-slate-950"
-                                  >
-                                    Approve
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => { setDeclineMode(true); setDeclineError(''); }}
+                                    onClick={() => setDeclineMode(true)}
                                     className="rounded-lg bg-red-500/10 px-4 py-2 text-sm font-semibold text-red-300 transition hover:bg-red-500 hover:text-slate-950"
                                   >
                                     Decline
                                   </button>
                                 </div>
                               ) : (
-                                <div className="space-y-3">
+                                <form method="post" action="index.php?tab=document-review" className="space-y-3">
+                                  <input type="hidden" name="action" value="review_document" />
+                                  <input type="hidden" name="_csrf" value={window.ADMIN_DOCUMENT_REVIEW_CSRF_TOKEN} />
+                                  <input type="hidden" name="document_id" value={doc.document_id} />
+                                  <input type="hidden" name="review_status" value="Declined" />
                                   <label htmlFor="decline-comment" className="block text-sm font-medium text-slate-200">
                                     Comment explaining the decline <span className="text-amber-400">*</span>
                                   </label>
                                   <textarea
                                     id="decline-comment"
+                                    name="review_comment"
                                     value={declineComment}
-                                    onChange={(event) => { setDeclineComment(event.target.value); setDeclineError(''); }}
+                                    onChange={(event) => setDeclineComment(event.target.value)}
                                     rows="3"
                                     required
+                                    maxLength="2000"
                                     autoFocus
                                     placeholder="Explain what needs to be changed..."
                                     className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm text-white outline-none placeholder:text-slate-500 focus:border-amber-500"
                                   />
-                                  {declineError && <p role="alert" className="text-sm text-red-300">{declineError}</p>}
                                   <div className="flex flex-wrap justify-end gap-3">
                                     <button
                                       type="button"
-                                      onClick={() => { setDeclineMode(false); setDeclineComment(''); setDeclineError(''); }}
+                                      onClick={() => { setDeclineMode(false); setDeclineComment(''); }}
                                       className="rounded-lg border border-slate-700 px-4 py-2 text-sm font-medium text-slate-300 transition hover:bg-slate-800"
                                     >
                                       Back
                                     </button>
                                     <button
-                                      type="button"
-                                      onClick={() => handleDocumentReview(doc.document_id, 'Declined', declineComment)}
+                                      type="submit"
                                       className="rounded-lg bg-red-500/10 px-4 py-2 text-sm font-semibold text-red-300 transition hover:bg-red-500 hover:text-slate-950"
                                     >
                                       Confirm Decline
                                     </button>
                                   </div>
-                                </div>
+                                </form>
                               )}
                             </div>
                           ) : (
                             <div className="flex flex-wrap justify-end gap-3 border-t border-slate-800 pt-4">
-                              {doc.review_status === 'Approved' && doc.file_data_url && (
-                                <button
-                                  type="button"
-                                  onClick={() => handlePrintReviewedDocument(doc)}
-                                  className="inline-flex items-center gap-2 rounded-lg bg-amber-500/10 px-4 py-2 text-sm font-semibold text-amber-300 transition hover:bg-amber-500 hover:text-slate-950"
-                                >
-                                  <i data-lucide="printer" className="h-4 w-4"></i> Print Confidential File
-                                </button>
-                              )}
                               <button
                                 type="button"
                                 onClick={closeDocumentReview}
@@ -1241,7 +1672,7 @@ const currentUser = window.ADMIN_USER;
                   <section className="bg-slate-900/80 border border-amber-500/20 rounded-2xl overflow-hidden shadow-xl animate-fade-in">
                     <div className="p-5 border-b border-slate-800 flex justify-between items-center">
                       <div>
-                        <h3 className="font-bold text-white text-base">Billable Hours Log (time_entries)</h3>
+                        <h3 className="font-bold text-white text-base">Billable Hours Log</h3>
                         <p className="mt-1 text-sm text-slate-400">{timeEntries.length} database entr{timeEntries.length === 1 ? 'y' : 'ies'} · {firmReporting.totalBillableHoursYTD} this year</p>
                       </div>
                       <button type="button" onClick={() => setTimeEntryModalOpen(true)} className="bg-gradient-to-r from-amber-600 to-amber-500 text-slate-950 font-semibold px-4 py-2 rounded-xl text-xs gold-glow-sm">Log Billable Hours</button>

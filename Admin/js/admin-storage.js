@@ -1,6 +1,4 @@
 window.AdminPortalStorage = (() => {
-  const APPOINTMENTS_KEY = 'law-office-appointment-workflow';
-  const NOTIFICATIONS_KEY = 'law-office-notifications';
   const ACTIVITY_HISTORY_LIMIT = 100;
 
   function getActivityStorageKey(email) {
@@ -58,44 +56,11 @@ window.AdminPortalStorage = (() => {
     );
     return entry;
   }
-  function readNotifications() {
-    const savedNotifications = window.localStorage.getItem(NOTIFICATIONS_KEY);
-    if (!savedNotifications) return [];
-    try {
-      const notifications = JSON.parse(savedNotifications);
-      return Array.isArray(notifications) ? notifications : [];
-    } catch (error) {
-      console.error('Unable to read portal notifications from browser storage.', error);
-      return [];
-    }
-  }
-
-  function readAppointmentRecords() {
-    const savedAppointments = window.localStorage.getItem(APPOINTMENTS_KEY);
-    if (!savedAppointments) {
-      return [
-        { appointment_id: 'seed-1', title: 'Case Consultation', client: 'Jane Doe', appointment_date: '2026-04-10 10:00 AM', type: 'Consultation', status: 'Confirmed — Master Calendar Updated' },
-        { appointment_id: 'seed-2', title: 'Court Hearing Prep', client: 'Acme Corporation', appointment_date: '2026-04-12 02:00 PM', type: 'Hearing', status: 'Confirmed — Master Calendar Updated' }
-      ];
-    }
-    try {
-      const appointments = JSON.parse(savedAppointments);
-      return Array.isArray(appointments) ? appointments : [];
-    } catch (error) {
-      console.error('Unable to read appointment workflow records from browser storage.', error);
-      return [];
-    }
-  }
-
   function getLocalDateString(date = new Date()) {
     return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
   }
 
   return {
-    APPOINTMENTS_KEY,
-    NOTIFICATIONS_KEY,
-    readNotifications,
-    readAppointmentRecords,
     readActivityHistory,
     recordActivity,
     getLocalDateString

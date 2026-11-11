@@ -1,6 +1,9 @@
 const { useState, useEffect, useRef } = React;
-        const { APPOINTMENTS_KEY, NOTIFICATIONS_KEY, readNotifications, readAppointmentRecords, readActivityHistory, recordActivity, getLocalDateString } = window.AdminPortalStorage;
+        const { readActivityHistory, recordActivity, getLocalDateString } = window.AdminPortalStorage;
 const currentUser = window.ADMIN_USER;
+const ADMIN_TABS = ['overview', 'users', 'transactions', 'document-review'];
+const ATTORNEY_TABS = ['overview', 'cases', 'schedule', 'hours', 'transactions', 'document-review', 'account-settings', 'customization'];
+const dashboardTabsForRole = (role) => role === 'admin' ? ADMIN_TABS : ATTORNEY_TABS;
 const ADMIN_THEMES = [
   { id: 'amber', name: 'Classic Amber', description: 'Warm gold accents', color: '#f59e0b' },
   { id: 'ocean', name: 'Ocean Blue', description: 'Calm blue accents', color: '#38bdf8' },
@@ -38,10 +41,126 @@ function readAdminThemePreference() {
   }
 }
 
+function formatAppointmentDateTime(value) {
+  const appointmentDate = new Date(String(value).replace(' ', 'T'));
+  if (Number.isNaN(appointmentDate.getTime())) return String(value);
+  return appointmentDate.toLocaleString(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true
+  });
+}
+
+function getCurrentAppointmentMinute() {
+  const now = new Date();
+  return now.getHours() * 60 + now.getMinutes() + 1;
+}
+
+function getTimePartsFromMinutes(minutes) {
+  const normalizedMinutes = minutes % (24 * 60);
+  const hour24 = Math.floor(normalizedMinutes / 60);
+  return {
+    hour: String(hour24 % 12 || 12),
+    minute: String(normalizedMinutes % 60).padStart(2, '0'),
+    meridiem: hour24 >= 12 ? 'PM' : 'AM'
+  };
+}
+
+function getAppointmentTimeParts(value, selectedDate) {
+  const appointmentDate = new Date(String(value).replace(' ', 'T'));
+  if (Number.isNaN(appointmentDate.getTime())) return getTimePartsFromMinutes(9 * 60);
+  if (
+    selectedDate === getLocalDateString()
+    && appointmentDate <= new Date()
+  ) {
+    return getTimePartsFromMinutes(getCurrentAppointmentMinute());
+  }
+  const hour24 = appointmentDate.getHours();
+  return {
+    hour: String(hour24 % 12 || 12),
+    minute: String(appointmentDate.getMinutes()).padStart(2, '0'),
+    meridiem: hour24 >= 12 ? 'PM' : 'AM'
+  };
+}
+
+function AppointmentTimeFields({ idPrefix, value, dateInputId, dateValue }) {
+  const [selectedDate, setSelectedDate] = useState(dateValue);
+  const [currentMinute, setCurrentMinute] = useState(getCurrentAppointmentMinute());
+  const [timeParts, setTimeParts] = useState(() => getAppointmentTimeParts(value, dateValue));
+  const [timeError, setTimeError] = useState('');
+  const minuteOfDay = (parts) => ((Number(parts.hour) % 12) + (parts.meridiem === 'PM' ? 12 : 0)) * 60 + Number(parts.minute);
+  const minimumMinute = selectedDate === getLocalDateString() ? currentMinute : null;
+  const selectClassName = 'rounded-lg border border-slate-700 bg-slate-950 px-2 py-2 text-sm text-white outline-none focus:border-amber-500';
+
+  useEffect(() => {
+    const dateInput = document.getElementById(dateInputId);
+    if (!dateInput) return undefined;
+    const syncDate = () => setSelectedDate(dateInput.value);
+    dateInput.addEventListener('change', syncDate);
+    const timer = window.setInterval(() => setCurrentMinute(getCurrentAppointmentMinute()), 10000);
+    return () => {
+      dateInput.removeEventListener('change', syncDate);
+      window.clearInterval(timer);
+    };
+  }, [dateInputId]);
+
+  useEffect(() => {
+    if (minimumMinute !== null && minuteOfDay(timeParts) < minimumMinute) {
+      if (minimumMinute < 24 * 60) {
+        setTimeParts(getTimePartsFromMinutes(minimumMinute));
+        setTimeError('');
+      } else {
+        setTimeError('No appointment times remain today. Choose a future date.');
+      }
+    } else {
+      setTimeError('');
+    }
+  }, [minimumMinute, timeParts]);
+
+  const updateTimePart = (part, selectedValue) => {
+    setTimeParts((current) => ({ ...current, [part]: selectedValue }));
+  };
+
+  return (
+    <fieldset className="min-w-0">
+      <legend className="sr-only">Final appointment time</legend>
+      <div className="grid grid-cols-[1fr_1fr_auto] gap-2">
+        <div>
+          <label className="sr-only" htmlFor={`${idPrefix}-hour`}>Hour</label>
+          <select id={`${idPrefix}-hour`} name="appointment_hour" required value={timeParts.hour} onChange={(event) => updateTimePart('hour', event.target.value)} aria-label="Appointment hour" className={`w-full ${selectClassName}`}>
+            {Array.from({ length: 12 }, (_, index) => String(index + 1)).map((hour) => (
+              <option key={hour} value={hour} disabled={minimumMinute !== null && ((Number(hour) % 12) + (timeParts.meridiem === 'PM' ? 12 : 0)) * 60 + 59 < minimumMinute}>{hour.padStart(2, '0')}</option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="sr-only" htmlFor={`${idPrefix}-minute`}>Minute</label>
+          <select id={`${idPrefix}-minute`} name="appointment_minute" required value={timeParts.minute} onChange={(event) => updateTimePart('minute', event.target.value)} aria-label="Appointment minute" className={`w-full ${selectClassName}`}>
+            {Array.from({ length: 60 }, (_, minute) => String(minute).padStart(2, '0')).map((minute) => (
+              <option key={minute} value={minute} disabled={minimumMinute !== null && ((Number(timeParts.hour) % 12) + (timeParts.meridiem === 'PM' ? 12 : 0)) * 60 + Number(minute) < minimumMinute}>{minute}</option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="sr-only" htmlFor={`${idPrefix}-meridiem`}>AM or PM</label>
+          <select id={`${idPrefix}-meridiem`} name="appointment_meridiem" required value={timeParts.meridiem} onChange={(event) => updateTimePart('meridiem', event.target.value)} aria-label="AM or PM" className={selectClassName}>
+            <option value="AM" disabled={minimumMinute !== null && ((Number(timeParts.hour) % 12) * 60 + 59) < minimumMinute}>AM</option>
+            <option value="PM" disabled={minimumMinute !== null && ((Number(timeParts.hour) % 12 + 12) * 60 + 59) < minimumMinute}>PM</option>
+          </select>
+        </div>
+      </div>
+      {timeError && <p role="alert" className="mt-1 text-xs text-amber-300">{timeError}</p>}
+    </fieldset>
+  );
+}
+
         function AdminLawyerDashboard() {
           const [userRole, setUserRole] = useState(window.ADMIN_USER_ROLE === 'lawyer' ? 'lawyer' : 'admin');
           const requestedTab = new URLSearchParams(window.location.search).get('tab');
-          const [activeTab, setActiveTab] = useState(userRole === 'admin' ? 'overview' : ['overview', 'cases', 'schedule', 'hours', 'document-review'].includes(requestedTab) ? requestedTab : 'overview');
+          const [activeTab, setActiveTab] = useState(dashboardTabsForRole(userRole).includes(requestedTab) ? requestedTab : 'overview');
           const [menuOpen, setMenuOpen] = useState(false);
           const profileMenuRef = useRef(null);
           const [themePreference, setThemePreference] = useState(readAdminThemePreference);
@@ -52,16 +171,63 @@ function readAdminThemePreference() {
           const searchContainerRef = useRef(null);
           const [reviewDocuments] = useState(() => Array.isArray(window.ADMIN_REVIEW_DOCUMENTS) ? window.ADMIN_REVIEW_DOCUMENTS : []);
           const [selectedReviewDocumentId, setSelectedReviewDocumentId] = useState(null);
+          const [selectedCaseForReview, setSelectedCaseForReview] = useState(null);
+          const [caseDeclineMode, setCaseDeclineMode] = useState(false);
           const [declineMode, setDeclineMode] = useState(false);
           const [declineComment, setDeclineComment] = useState('');
-          const [appointmentRequests, setAppointmentRequests] = useState(readAppointmentRecords);
-          const [selectedAppointmentId, setSelectedAppointmentId] = useState(null);
-          const [appointmentAvailabilityDate, setAppointmentAvailabilityDate] = useState('');
-          const [appointmentAvailabilityTime, setAppointmentAvailabilityTime] = useState('');
-          const [appointmentDecisionComment, setAppointmentDecisionComment] = useState('');
-          const [appointmentDecisionError, setAppointmentDecisionError] = useState('');
-          const [notifications, setNotifications] = useState(readNotifications);
+          const [notifications, setNotifications] = useState(() => (
+            Array.isArray(window.ADMIN_NOTIFICATIONS) ? window.ADMIN_NOTIFICATIONS : []
+          ));
           const [notificationsOpen, setNotificationsOpen] = useState(false);
+          const [notificationError, setNotificationError] = useState('');
+          useEffect(() => {
+            const syncTabFromUrl = () => {
+              const tabFromUrl = new URLSearchParams(window.location.search).get('tab');
+              setActiveTab(dashboardTabsForRole(userRole).includes(tabFromUrl) ? tabFromUrl : 'overview');
+            };
+            window.addEventListener('popstate', syncTabFromUrl);
+            return () => window.removeEventListener('popstate', syncTabFromUrl);
+          }, [userRole]);
+
+          useEffect(() => {
+            if (!dashboardTabsForRole(userRole).includes(activeTab)) {
+              setActiveTab('overview');
+              return;
+            }
+            const url = new URL(window.location.href);
+            if (url.searchParams.get('tab') !== activeTab) {
+              url.searchParams.set('tab', activeTab);
+              window.history.pushState({ tab: activeTab }, '', url);
+            }
+          }, [userRole, activeTab]);
+
+          useEffect(() => {
+            let active = true;
+            const refreshNotifications = async () => {
+              try {
+                const response = await fetch('../notification-read.php?portal=admin');
+                const result = await response.json();
+                if (!response.ok || !Array.isArray(result.notifications)) {
+                  throw new Error(result.error || 'Unable to load notifications.');
+                }
+                if (active) {
+                  setNotifications(result.notifications);
+                  setNotificationError('');
+                }
+              } catch (error) {
+                if (active) {
+                  console.error('Unable to load appointment notifications.', error);
+                  setNotificationError(error.message);
+                }
+              }
+            };
+            refreshNotifications();
+            const timer = window.setInterval(refreshNotifications, 15000);
+            return () => {
+              active = false;
+              window.clearInterval(timer);
+            };
+          }, []);
           const [activityHistory, setActivityHistory] = useState(() => {
             try {
               return readActivityHistory(currentUser.email);
@@ -105,6 +271,13 @@ function readAdminThemePreference() {
             pendingAppointments: window.ADMIN_PENDING_APPOINTMENTS_COUNT,
             totalBillableHoursYTD: `${Number(window.ADMIN_TOTAL_BILLABLE_HOURS_YTD || 0).toFixed(2)} hrs`,
             totalClients: window.ADMIN_TOTAL_CLIENTS
+          };
+          const attorneyReportingData = window.ADMIN_ATTORNEY_REPORTING || {};
+          const attorneyReporting = {
+            totalCases: Number(attorneyReportingData.totalCases || 0),
+            pendingAppointments: Number(attorneyReportingData.pendingAppointments || 0),
+            totalBillableHoursYTD: `${Number(attorneyReportingData.totalBillableHoursYTD || 0).toFixed(2)} hrs`,
+            totalClients: Number(attorneyReportingData.totalClients || 0)
           };
 
           const assignedCases = caseRecords.filter((legalCase) => legalCase.lawyer_name);
@@ -237,7 +410,7 @@ function readAdminThemePreference() {
             if (window.lucide) {
               window.lucide.createIcons();
             }
-          }, [userRole, activeTab, menuOpen, reviewDocuments, appointmentRequests, notificationsOpen, notifications, timeEntryModalOpen, timeEntries, selectedTheme]);
+          }, [userRole, activeTab, menuOpen, reviewDocuments, notificationsOpen, notifications, timeEntryModalOpen, timeEntries, selectedTheme]);
 
           useEffect(() => {
             document.documentElement.dataset.adminTheme = selectedTheme;
@@ -253,24 +426,6 @@ function readAdminThemePreference() {
               setThemePreference((current) => ({ ...current, theme: themeId, storageError: true }));
             }
           };
-
-          useEffect(() => {
-            const syncAppointments = (event) => {
-              if (event.key !== APPOINTMENTS_KEY) return;
-              setAppointmentRequests(readAppointmentRecords());
-            };
-            window.addEventListener('storage', syncAppointments);
-            return () => window.removeEventListener('storage', syncAppointments);
-          }, []);
-
-          useEffect(() => {
-            const syncNotifications = (event) => {
-              if (event.key !== NOTIFICATIONS_KEY) return;
-              setNotifications(readNotifications());
-            };
-            window.addEventListener('storage', syncNotifications);
-            return () => window.removeEventListener('storage', syncNotifications);
-          }, []);
 
           useEffect(() => {
             if (!notificationsOpen) return undefined;
@@ -350,132 +505,50 @@ function readAdminThemePreference() {
             return () => window.removeEventListener('keydown', handleReviewKeyDown);
           }, [selectedReviewDocumentId]);
 
-          useEffect(() => {
-            if (!selectedAppointmentId) return undefined;
-            const handleAppointmentReviewKeyDown = (event) => {
-              if (event.key === 'Escape') closeAppointmentReview();
-            };
-            window.addEventListener('keydown', handleAppointmentReviewKeyDown);
-            return () => window.removeEventListener('keydown', handleAppointmentReviewKeyDown);
-          }, [selectedAppointmentId]);
-
           const handleLogout = () => {
             window.location.href = 'logout.php';
           };
 
-          const addNotification = (notification) => {
-            const currentNotifications = readNotifications();
-            const updatedNotifications = [{
-              notification_id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-              ...notification,
-              created_at: new Date().toISOString(),
-              read: false
-            }, ...currentNotifications].slice(0, 100);
+          const updateNotificationReadState = async (notificationId = null) => {
+            const body = new URLSearchParams({
+              _csrf: window.ADMIN_APPOINTMENT_CSRF_TOKEN,
+              portal: 'admin',
+              action: notificationId === null ? 'mark_all_read' : 'mark_read'
+            });
+            if (notificationId !== null) body.set('notification_id', String(notificationId));
             try {
-              window.localStorage.setItem(NOTIFICATIONS_KEY, JSON.stringify(updatedNotifications));
-              setNotifications(updatedNotifications);
-            } catch (error) {
-              console.error('Unable to save a portal notification.', error);
-              window.alert('The form was saved, but its notification could not be saved. Check browser storage.');
-            }
-          };
-
-          const updateNotifications = (update) => {
-            const updatedNotifications = update(readNotifications());
-            try {
-              window.localStorage.setItem(NOTIFICATIONS_KEY, JSON.stringify(updatedNotifications));
-              setNotifications(updatedNotifications);
-            } catch (error) {
-              console.error('Unable to update portal notifications.', error);
-              window.alert('Unable to update notifications. Check browser storage and try again.');
-            }
-          };
-
-          const markAllNotificationsRead = () => {
-            updateNotifications((current) => current.map((notification) => (
-              notification.audience === 'attorney' ? { ...notification, read: true } : notification
-            )));
-          };
-
-          const openNotification = (notification) => {
-            if (!notification.read) {
-              updateNotifications((current) => current.map((item) => (
-                item.notification_id === notification.notification_id ? { ...item, read: true } : item
+              const response = await fetch('../notification-read.php', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+                body
+              });
+              const result = await response.json();
+              if (!response.ok || !result.success) throw new Error(result.error || 'Unable to update notifications.');
+              setNotifications((current) => current.map((notification) => (
+                notificationId === null || notification.notification_id === notificationId
+                  ? { ...notification, read: true }
+                  : notification
               )));
+              setNotificationError('');
+              return true;
+            } catch (error) {
+              console.error('Unable to update appointment notifications.', error);
+              setNotificationError(error.message);
+              return false;
             }
+          };
+
+          const markAllNotificationsRead = () => updateNotificationReadState();
+
+          const openNotification = async (notification) => {
+            if (!notification.read && !await updateNotificationReadState(notification.notification_id)) return;
             if (notification.tab) {
               setUserRole(notification.role || 'lawyer');
               setActiveTab(notification.tab);
+            } else if (notification.notification_type === 'appointment_conflict') {
+              setActiveTab('schedule');
             }
             setNotificationsOpen(false);
-          };
-
-          const saveAppointmentDecision = (appointmentId, decision) => {
-            const currentAppointments = readAppointmentRecords();
-            const target = currentAppointments.find((appointment) => appointment.appointment_id === appointmentId);
-            if (!target || target.status !== 'Attorney Review — Submitted') {
-              setAppointmentRequests(currentAppointments);
-              window.alert('This appointment is no longer awaiting review. The queue has been refreshed.');
-              return false;
-            }
-            if (!appointmentAvailabilityDate || !appointmentAvailabilityTime) {
-              setAppointmentDecisionError('Select an available date and time before sending your decision to staff.');
-              return false;
-            }
-            const reviewedAt = new Date().toISOString();
-            const reviewer = userRole === 'admin' ? 'Victoria Sterling' : 'Marcus Vance';
-            const availabilityDateTime = `${appointmentAvailabilityDate} ${appointmentAvailabilityTime}${target.time_zone ? ` (${target.time_zone})` : ''}`;
-            const comment = appointmentDecisionComment.trim();
-            const updatedAppointments = currentAppointments.map((appointment) => (
-              appointment.appointment_id === appointmentId
-                ? {
-                    ...appointment,
-                    status: decision === 'Approve' ? 'Approved — Client Confirmation Needed' : 'Reschedule — Alternatives Needed',
-                    appointment_date: availabilityDateTime,
-                    attorney_availability_date: appointmentAvailabilityDate,
-                    attorney_availability_time: appointmentAvailabilityTime,
-                    attorney_alternatives: decision === 'Reschedule' ? availabilityDateTime : '',
-                    attorney_comment: comment,
-                    reviewed_by: reviewer,
-                    reviewed_at: reviewedAt,
-                    staff_notification_at: reviewedAt,
-                    updated_at: reviewedAt
-                  }
-                : appointment
-            ));
-            try {
-              window.localStorage.setItem(APPOINTMENTS_KEY, JSON.stringify(updatedAppointments));
-              setAppointmentRequests(updatedAppointments);
-              addNotification({
-                audience: 'staff',
-                type: 'appointment-decision',
-                title: decision === 'Approve' ? 'Appointment approved' : 'Alternative appointment proposed',
-                message: `${target.client}: ${availabilityDateTime}${comment ? ` — ${comment}` : ''}`,
-                tab: 'appointments'
-              });
-              closeAppointmentReview();
-              return true;
-            } catch (error) {
-              console.error('Unable to save the attorney appointment decision.', error);
-              window.alert('Unable to save the appointment decision. Check browser storage and try again.');
-              return false;
-            }
-          };
-
-          const openAppointmentReview = (appointment) => {
-            setSelectedAppointmentId(appointment.appointment_id);
-            setAppointmentAvailabilityDate(appointment.requested_date || '');
-            setAppointmentAvailabilityTime(appointment.requested_time || '');
-            setAppointmentDecisionComment('');
-            setAppointmentDecisionError('');
-          };
-
-          const closeAppointmentReview = () => {
-            setSelectedAppointmentId(null);
-            setAppointmentAvailabilityDate('');
-            setAppointmentAvailabilityTime('');
-            setAppointmentDecisionComment('');
-            setAppointmentDecisionError('');
           };
 
           const openDocumentReview = (doc) => {
@@ -586,16 +659,16 @@ function readAdminThemePreference() {
                   <div className="relative shrink-0">
                     <button
                       type="button"
-                      aria-label={`Notifications${notifications.filter((notification) => notification.audience === 'attorney' && !notification.read).length ? `, ${notifications.filter((notification) => notification.audience === 'attorney' && !notification.read).length} unread` : ''}`}
+                      aria-label={`Notifications${notifications.filter((notification) => !notification.read).length ? `, ${notifications.filter((notification) => !notification.read).length} unread` : ''}`}
                       aria-expanded={notificationsOpen}
                       aria-controls="admin-notifications-panel"
                       onClick={() => setNotificationsOpen((open) => !open)}
                       className="relative inline-flex h-12 w-12 items-center justify-center rounded-xl border border-slate-700 bg-slate-950/80 text-amber-400 shadow-lg transition hover:border-amber-500/60 hover:bg-slate-900"
                     >
                       <i data-lucide="bell" className="h-5 w-5"></i>
-                      {notifications.filter((notification) => notification.audience === 'attorney' && !notification.read).length > 0 && (
+                      {notifications.filter((notification) => !notification.read).length > 0 && (
                         <span className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full border-2 border-slate-900 bg-red-500 px-1 text-[10px] font-bold text-white">
-                          {notifications.filter((notification) => notification.audience === 'attorney' && !notification.read).length}
+                          {notifications.filter((notification) => !notification.read).length}
                         </span>
                       )}
                     </button>
@@ -603,10 +676,11 @@ function readAdminThemePreference() {
                       <div id="admin-notifications-panel" className="absolute right-0 top-full mt-2 w-[min(22rem,90vw)] overflow-hidden rounded-xl border border-slate-700 bg-slate-950 shadow-2xl">
                         <div className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
                           <h2 className="text-sm font-semibold text-white">Notifications</h2>
-                          <button type="button" onClick={markAllNotificationsRead} className="text-xs font-medium text-amber-300 hover:text-amber-200">Mark all read</button>
+                          {notifications.some((notification) => !notification.read) && <button type="button" onClick={markAllNotificationsRead} className="text-xs font-medium text-amber-300 hover:text-amber-200">Mark all read</button>}
                         </div>
+                        {notificationError && <p role="alert" className="px-4 py-2 text-xs text-red-300">{notificationError}</p>}
                         <div className="max-h-80 overflow-y-auto">
-                          {notifications.filter((notification) => notification.audience === 'attorney').length ? notifications.filter((notification) => notification.audience === 'attorney').map((notification) => (
+                          {notifications.length ? notifications.map((notification) => (
                             <button key={notification.notification_id} type="button" onClick={() => openNotification(notification)} className={`block w-full border-b border-slate-800 px-4 py-3 text-left transition hover:bg-slate-800/70 ${notification.read ? 'opacity-70' : 'bg-amber-500/5'}`}>
                               <span className="flex items-start justify-between gap-3">
                                 <span className="text-sm font-semibold text-white">{notification.title}</span>
@@ -650,7 +724,7 @@ function readAdminThemePreference() {
                         <nav className="flex-1 space-y-1 overflow-y-auto p-2" aria-label="Attorney navigation">
                           {[
                             { tab: 'overview', label: 'Overview', icon: 'layout-dashboard' },
-                            { tab: 'cases', label: 'My Cases', icon: 'briefcase-business' },
+                            { tab: 'cases', label: 'Assigned Legal Cases', icon: 'briefcase-business' },
                             { tab: 'schedule', label: 'Court Calendar', icon: 'calendar-days' },
                             { tab: 'hours', label: 'Billable Hours', icon: 'clock-3' },
                             { tab: 'transactions', label: 'Transaction History & Tracking', icon: 'history' },
@@ -738,7 +812,7 @@ function readAdminThemePreference() {
                   <nav className="flex-1 space-y-2 overflow-y-auto p-3">
                     {userRole === 'lawyer' && [
                       { tab: 'overview', label: 'Overview', icon: 'layout-dashboard' },
-                      { tab: 'cases', label: 'My Cases', icon: 'briefcase-business' },
+                      { tab: 'cases', label: 'Assigned Legal Cases', icon: 'briefcase-business' },
                       { tab: 'schedule', label: 'Court Calendar', icon: 'calendar-days' },
                       { tab: 'hours', label: 'Billable Hours', icon: 'clock-3' }
                     ].map((item) => (
@@ -922,7 +996,7 @@ function readAdminThemePreference() {
                               <h3 className="font-semibold text-white">Billable Hours</h3>
                               <p className="mt-1 text-xs text-slate-400">Monthly hours · last six months</p>
                             </div>
-                            <span className="rounded-lg bg-amber-500/10 px-3 py-1.5 text-sm font-bold text-amber-300">{firmReporting.totalBillableHoursYTD}</span>
+                            <span className="rounded-lg bg-amber-500/10 px-3 py-1.5 text-sm font-bold text-amber-300">{attorneyReporting.totalBillableHoursYTD}</span>
                           </div>
                           <svg viewBox="0 0 600 180" role="img" aria-label="Monthly billable hours for the last six months" className="h-44 w-full overflow-visible">
                             {[30, 70, 110, 150].map((y) => (
@@ -947,10 +1021,10 @@ function readAdminThemePreference() {
 
                       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
                         {[
-                          { label: 'Firm Legal Cases', value: firmReporting.totalCases, icon: 'scale', color: 'text-amber-300' },
-                          { label: 'Pending Appointments', value: firmReporting.pendingAppointments, icon: 'calendar-clock', color: 'text-sky-300' },
-                          { label: 'Billable Hours YTD', value: firmReporting.totalBillableHoursYTD, icon: 'clock-3', color: 'text-emerald-300' },
-                          { label: 'Total Clients', value: firmReporting.totalClients, icon: 'users-round', color: 'text-violet-300' }
+                          { label: 'Legal Cases', value: attorneyReporting.totalCases, icon: 'scale', color: 'text-amber-300' },
+                          { label: 'Pending Appointments', value: attorneyReporting.pendingAppointments, icon: 'calendar-clock', color: 'text-sky-300' },
+                          { label: 'Billable Hours YTD', value: attorneyReporting.totalBillableHoursYTD, icon: 'clock-3', color: 'text-emerald-300' },
+                          { label: 'Total Clients', value: attorneyReporting.totalClients, icon: 'users-round', color: 'text-violet-300' }
                         ].map((metric) => (
                           <section key={metric.label} className="flex min-h-36 flex-col rounded-2xl border border-slate-800 bg-slate-900/80 p-4 shadow-lg">
                             <p className="text-left text-xs font-medium text-slate-400">{metric.label}</p>
@@ -965,16 +1039,8 @@ function readAdminThemePreference() {
                         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 p-5">
                           <div>
                             <h3 className="font-bold text-white">Assigned Legal Cases</h3>
-                            <p className="mt-1 text-xs text-slate-400">Recently filed matters assigned to the legal team</p>
+                            <p className="mt-1 text-xs text-slate-400">Recently filed matters assigned to you</p>
                           </div>
-                          <button
-                            type="button"
-                            onClick={() => alert('Opening Document Upload Modal')}
-                            className="inline-flex items-center gap-2 rounded-lg bg-amber-500 px-4 py-2.5 text-sm font-semibold text-slate-950 transition hover:bg-amber-400"
-                          >
-                            <i data-lucide="upload" className="h-4 w-4"></i>
-                            Upload Legal Document
-                          </button>
                         </div>
                         <div className="overflow-x-auto">
                           <table className="w-full min-w-[620px] text-left text-sm text-slate-300">
@@ -1055,7 +1121,11 @@ function readAdminThemePreference() {
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-slate-800/60">
-                            {pendingAppointments.map((appointment) => (
+                            {pendingAppointments.map((appointment) => {
+                              const appointmentDate = String(appointment.appointment_date).slice(0, 10);
+                              const finalDate = appointmentDate < getLocalDateString() ? getLocalDateString() : appointmentDate;
+                              const dateInputId = `admin-appointment-date-${appointment.appointment_id}`;
+                              return (
                               <tr key={appointment.appointment_id} className="hover:bg-slate-800/40">
                                 <td className="p-4 font-semibold text-white">{appointment.client_name || '—'}</td>
                                 <td className="p-4">
@@ -1068,20 +1138,27 @@ function readAdminThemePreference() {
                                     <span className="mt-1 block max-w-xs whitespace-pre-wrap text-xs text-slate-400">{appointment.issue_description}</span>
                                   )}
                                 </td>
-                                <td className="p-4">{appointment.appointment_date}</td>
+                                <td className="p-4 whitespace-nowrap">{formatAppointmentDateTime(appointment.appointment_date)}</td>
                                 <td className="p-4">
                                   <form id={`confirm-appointment-${appointment.appointment_id}`} method="post" action="index.php" className="flex items-center gap-2">
                                     <input type="hidden" name="action" value="confirm_appointment" />
                                     <input type="hidden" name="_csrf" value={window.ADMIN_APPOINTMENT_CSRF_TOKEN} />
                                     <input type="hidden" name="appointment_id" value={appointment.appointment_id} />
                                     <input
-                                      type="datetime-local"
+                                      type="date"
+                                      id={dateInputId}
                                       name="appointment_date"
                                       required
-                                      min={new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)}
-                                      defaultValue={appointment.appointment_date.replace(' ', 'T').slice(0, 16)}
-                                      aria-label={`Attorney appointment time for ${appointment.client_name || appointment.title}`}
-                                      className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white outline-none focus:border-amber-500"
+                                      min={getLocalDateString()}
+                                      defaultValue={finalDate}
+                                      aria-label={`Final appointment date for ${appointment.client_name || appointment.title}`}
+                                      className="min-w-[145px] rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white outline-none focus:border-amber-500"
+                                    />
+                                    <AppointmentTimeFields
+                                      idPrefix={`appointment-${appointment.appointment_id}`}
+                                      value={appointment.appointment_date}
+                                      dateInputId={dateInputId}
+                                      dateValue={finalDate}
                                     />
                                   </form>
                                 </td>
@@ -1096,7 +1173,8 @@ function readAdminThemePreference() {
                                   </button>
                                 </td>
                               </tr>
-                            ))}
+                              );
+                            })}
                             {pendingAppointments.length === 0 && (
                               <tr><td colSpan="5" className="p-6 text-center text-slate-400">No pending appointment requests.</td></tr>
                             )}
@@ -1288,7 +1366,7 @@ function readAdminThemePreference() {
                               <td className="p-4 font-semibold text-white">{doc.document_name}</td>
                               <td className="p-4 text-slate-300">{doc.case_number} · {doc.case_title}</td>
                               <td className="p-4 text-slate-300">{doc.uploaded_by}</td>
-                              <td className="whitespace-nowrap p-4 text-slate-400">{doc.upload_date}</td>
+                              <td className="whitespace-nowrap p-4 text-slate-400">{doc.upload_date || 'Date not recorded'}</td>
                               <td className="p-4">
                                 <span className={`rounded-full border px-3 py-1 text-xs font-medium ${
                                   doc.review_status === 'Approved'
@@ -1362,7 +1440,7 @@ function readAdminThemePreference() {
 
                         <div className="space-y-4 p-6">
                           <div className="flex flex-wrap items-center justify-between gap-3 text-sm text-slate-400">
-                            <span>Submitted by {doc.uploaded_by || 'Staff'} on {doc.upload_date}</span>
+                            <span>Submitted by {doc.uploaded_by || 'Staff'} on {doc.upload_date || 'date not recorded'}</span>
                             <span className={`rounded-full border px-3 py-1 text-xs font-medium ${
                               doc.review_status === 'Approved'
                                 ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
@@ -1412,7 +1490,7 @@ function readAdminThemePreference() {
                                     <input type="hidden" name="review_status" value="Approved" />
                                     <button
                                       type="submit"
-                                      className="rounded-lg bg-emerald-500/10 px-4 py-2 text-sm font-semibold text-emerald-300 transition hover:bg-emerald-500 hover:text-slate-950"
+                                      className="min-w-[6.25rem] rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-slate-950 shadow-sm transition hover:bg-emerald-400 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-300"
                                     >
                                       Approve
                                     </button>
@@ -1420,7 +1498,7 @@ function readAdminThemePreference() {
                                   <button
                                     type="button"
                                     onClick={() => setDeclineMode(true)}
-                                    className="rounded-lg bg-red-500/10 px-4 py-2 text-sm font-semibold text-red-300 transition hover:bg-red-500 hover:text-slate-950"
+                                    className="min-w-[6.25rem] rounded-lg bg-red-500 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-red-400 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-300"
                                   >
                                     Decline
                                   </button>
@@ -1488,47 +1566,164 @@ function readAdminThemePreference() {
                       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 w-full max-w-5xl">
                         <div className="bg-slate-900/80 border border-amber-500/20 p-5 rounded-2xl shadow-lg">
                           <p className="text-xs uppercase text-slate-400 font-semibold">Legal Cases</p>
-                          <p className="text-3xl font-extrabold text-white mt-2 font-mono">{firmReporting.totalCases}</p>
+                          <p className="text-3xl font-extrabold text-white mt-2 font-mono">{attorneyReporting.totalCases}</p>
                         </div>
                         <div className="bg-slate-900/80 border border-amber-500/20 p-5 rounded-2xl shadow-lg">
                           <p className="text-xs uppercase text-slate-400 font-semibold">Pending Appointments</p>
-                          <p className="text-3xl font-extrabold text-white mt-2 font-mono">{firmReporting.pendingAppointments}</p>
+                          <p className="text-3xl font-extrabold text-white mt-2 font-mono">{attorneyReporting.pendingAppointments}</p>
                         </div>
                         <div className="bg-slate-900/80 border border-amber-500/20 p-5 rounded-2xl shadow-lg">
                           <p className="text-xs uppercase text-slate-400 font-semibold">Billable Hours (YTD)</p>
-                          <p className="text-3xl font-extrabold text-white mt-2 font-mono">{firmReporting.totalBillableHoursYTD}</p>
+                          <p className="text-3xl font-extrabold text-white mt-2 font-mono">{attorneyReporting.totalBillableHoursYTD}</p>
                         </div>
                         <div className="bg-slate-900/80 border border-amber-500/20 p-5 rounded-2xl shadow-lg">
                           <p className="text-xs uppercase text-slate-400 font-semibold">Total Clients</p>
-                          <p className="text-3xl font-extrabold text-amber-300 mt-2 font-mono">{firmReporting.totalClients}</p>
+                          <p className="text-3xl font-extrabold text-amber-300 mt-2 font-mono">{attorneyReporting.totalClients}</p>
                         </div>
                       </div>
                     </div>
 
                     <section className="bg-slate-900/80 border border-amber-500/20 rounded-2xl overflow-hidden shadow-xl animate-fade-in">
                       <div className="p-5 border-b border-slate-800 flex justify-between items-center">
-                        <h3 className="font-bold text-white text-base">Assigned Legal Cases</h3>
-                        <button onClick={() => alert('Opening Document Upload Modal')} className="bg-gradient-to-r from-amber-600 to-amber-500 text-slate-950 font-semibold px-4 py-2 rounded-xl text-xs gold-glow-sm">Upload Legal Document</button>
+                        <div>
+                          <h3 className="font-bold text-white text-base">Assigned Legal Cases</h3>
+                          <p className="mt-1 text-xs text-slate-400">Update the operational status of your assigned cases.</p>
+                        </div>
                       </div>
+                      {window.ADMIN_CASE_STATUS_NOTICE && (
+                        <p role={window.ADMIN_CASE_STATUS_NOTICE.type === 'error' ? 'alert' : 'status'} className={`m-5 mb-0 rounded-xl border p-4 text-sm ${window.ADMIN_CASE_STATUS_NOTICE.type === 'error' ? 'border-red-500/30 bg-red-500/10 text-red-200' : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'}`}>
+                          {window.ADMIN_CASE_STATUS_NOTICE.message}
+                        </p>
+                      )}
                       <table className="w-full text-left text-sm text-slate-300">
                         <thead className="bg-slate-950/60 text-amber-400/80 uppercase text-xs">
-                          <tr><th className="p-4">Case #</th><th className="p-4">Title</th><th className="p-4">Status</th><th className="p-4">Filed Date</th></tr>
+                          <tr><th className="p-4">Case #</th><th className="p-4">Title</th><th className="p-4">Status</th><th className="p-4">Case Review</th><th className="p-4">Filed Date</th><th className="p-4">Review</th></tr>
                         </thead>
                         <tbody className="divide-y divide-slate-800/60">
                           {assignedCases.filter(matchesSearch).map(c => (
                             <tr key={c.case_id} className="hover:bg-slate-800/40">
                               <td className="p-4 font-mono text-amber-300">{c.case_number}</td>
                               <td className="p-4 font-semibold text-white">{c.title}</td>
-                              <td className="p-4"><span className={`px-2.5 py-1 rounded-full text-xs ${c.status === 'Active' ? 'bg-emerald-500/10 text-emerald-400' : c.status === 'Pending' ? 'bg-amber-500/10 text-amber-300' : 'bg-slate-700/60 text-slate-300'}`}>{c.status}</span></td>
+                              <td className="p-4">
+                                <form method="post" action="index.php?tab=cases" className="flex min-w-48 items-center gap-2">
+                                  <input type="hidden" name="action" value="update_case_status" />
+                                  <input type="hidden" name="case_id" value={c.case_id} />
+                                  <input type="hidden" name="_csrf" value={window.ADMIN_CASE_STATUS_CSRF_TOKEN} />
+                                  <select name="case_status" aria-label={`Status for case ${c.case_number}`} defaultValue={c.status} className="min-w-28 rounded-lg border border-slate-700 bg-slate-950 px-2.5 py-2 text-xs text-white outline-none focus:border-amber-500">
+                                    {['Active', 'Pending', 'Closed', 'On Hold'].map((status) => <option key={status} value={status}>{status}</option>)}
+                                  </select>
+                                  <button type="submit" className="rounded-lg bg-amber-500 px-3 py-2 text-xs font-semibold text-slate-950 transition hover:bg-amber-400">Save</button>
+                                </form>
+                              </td>
+                              <td className="p-4">
+                                <span className={`rounded-full px-2.5 py-1 text-xs ${c.case_review_status === 'Approved' ? 'bg-emerald-500/10 text-emerald-300' : c.case_review_status === 'Declined' ? 'bg-red-500/10 text-red-300' : 'bg-amber-500/10 text-amber-300'}`}>
+                                  {c.case_review_status || 'Pending Review'}
+                                </span>
+                              </td>
                               <td className="p-4 text-slate-400">{c.filed_date}</td>
+                              <td className="p-4">
+                                {(!c.case_review_status || c.case_review_status === 'Pending Review') && (
+                                  <button type="button" onClick={() => { setCaseDeclineMode(false); setSelectedCaseForReview(c); }} className="rounded-lg border border-amber-500/40 px-3 py-1.5 text-xs font-semibold text-amber-300 transition hover:bg-amber-500/10">Review</button>
+                                )}
+                              </td>
                             </tr>
                           ))}
                           {assignedCases.filter(matchesSearch).length === 0 && (
-                            <tr><td colSpan="4" className="p-6 text-center text-slate-400">{assignedCases.length === 0 ? 'No assigned legal cases found.' : 'No matching cases.'}</td></tr>
+                            <tr><td colSpan="6" className="p-6 text-center text-slate-400">{assignedCases.length === 0 ? 'No assigned legal cases found.' : 'No matching cases.'}</td></tr>
                           )}
                         </tbody>
                       </table>
                     </section>
+                    {window.ADMIN_CASE_REVIEW_NOTICE && (
+                      <p role={window.ADMIN_CASE_REVIEW_NOTICE.type === 'error' ? 'alert' : 'status'} className={`rounded-xl border p-4 text-sm ${window.ADMIN_CASE_REVIEW_NOTICE.type === 'error' ? 'border-red-500/30 bg-red-500/10 text-red-200' : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'}`}>
+                        {window.ADMIN_CASE_REVIEW_NOTICE.message}
+                      </p>
+                    )}
+                    {selectedCaseForReview && (
+                      <div className="fixed inset-0 z-[80] flex items-center justify-center overflow-y-auto bg-black/70 p-4 backdrop-blur-sm" onMouseDown={(event) => {
+                        if (event.target === event.currentTarget) { setSelectedCaseForReview(null); setCaseDeclineMode(false); }
+                      }}>
+                        <section role="dialog" aria-modal="true" aria-labelledby="case-review-title" className="my-auto w-full max-w-xl overflow-hidden rounded-2xl border border-amber-500/30 bg-slate-900 shadow-2xl">
+                          <div className="flex items-start justify-between border-b border-slate-800 px-6 py-4">
+                            <div>
+                              <h2 id="case-review-title" className="text-xl font-bold text-white">Review Case</h2>
+                              <p className="mt-1 text-sm text-slate-400">{selectedCaseForReview.case_number} · {selectedCaseForReview.title}</p>
+                            </div>
+                            <button type="button" onClick={() => { setSelectedCaseForReview(null); setCaseDeclineMode(false); }} aria-label="Close case review" className="rounded-lg px-2 py-1 text-2xl leading-none text-slate-400 transition hover:bg-slate-800 hover:text-white">&times;</button>
+                          </div>
+                          <div className="space-y-4 p-6">
+                            {selectedCaseForReview.description && (
+                              <div>
+                                <h3 className="text-sm font-semibold text-slate-200">Case details</h3>
+                                <p className="mt-1 whitespace-pre-wrap text-sm text-slate-400">{selectedCaseForReview.description}</p>
+                              </div>
+                            )}
+                            <section aria-labelledby="case-review-documents-title" className="space-y-3">
+                              <div>
+                                <h3 id="case-review-documents-title" className="text-sm font-semibold text-slate-200">Uploaded Documents</h3>
+                                <p className="mt-1 text-xs text-slate-400">Files Staff submitted for this case.</p>
+                              </div>
+                              {reviewDocuments.filter((doc) => String(doc.case_id) === String(selectedCaseForReview.case_id)).length > 0 ? (
+                                <div className="space-y-4">
+                                  {reviewDocuments.filter((doc) => String(doc.case_id) === String(selectedCaseForReview.case_id)).map((doc) => (
+                                    <article key={doc.document_id} className="overflow-hidden rounded-xl border border-slate-700 bg-slate-950/70">
+                                      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 px-4 py-3">
+                                        <div className="min-w-0">
+                                          <p className="truncate text-sm font-medium text-white">{doc.document_name}</p>
+                                          <p className="mt-1 text-xs text-slate-400">Uploaded by {doc.uploaded_by || 'Staff'} · {doc.upload_date || 'date not recorded'}</p>
+                                        </div>
+                                        <a href={doc.download_url} className="shrink-0 rounded-lg border border-amber-500/40 px-3 py-1.5 text-xs font-semibold text-amber-300 transition hover:bg-amber-500/10">
+                                          Download
+                                        </a>
+                                      </div>
+                                      {doc.previewable ? (
+                                        <iframe
+                                          title={`Case document preview: ${doc.document_name}`}
+                                          src={doc.file_url}
+                                          className="h-[50vh] min-h-64 w-full bg-white"
+                                        />
+                                      ) : (
+                                        <p className="p-4 text-sm text-slate-400">Preview is unavailable for this file type. Download it to review the contents.</p>
+                                      )}
+                                    </article>
+                                  ))}
+                                </div>
+                              ) : (
+                                <p className="rounded-lg border border-dashed border-slate-700 p-4 text-sm text-slate-400">No documents have been uploaded for this case yet.</p>
+                              )}
+                            </section>
+                            {!caseDeclineMode ? (
+                              <div className="flex flex-col-reverse gap-3 border-t border-slate-800 pt-4 sm:flex-row sm:justify-end">
+                                <button type="button" onClick={() => setSelectedCaseForReview(null)} className="rounded-lg border border-slate-700 px-4 py-2.5 text-sm font-medium text-slate-300 transition hover:bg-slate-800">Cancel</button>
+                                <button type="button" onClick={() => setCaseDeclineMode(true)} className="rounded-lg border border-red-500/40 px-4 py-2.5 text-sm font-semibold text-red-300 transition hover:bg-red-500/10">Decline</button>
+                                <form method="post" action="index.php?tab=cases">
+                                  <input type="hidden" name="action" value="review_case" />
+                                  <input type="hidden" name="case_id" value={selectedCaseForReview.case_id} />
+                                  <input type="hidden" name="case_review_status" value="Approved" />
+                                  <input type="hidden" name="_csrf" value={window.ADMIN_CASE_REVIEW_CSRF_TOKEN} />
+                                  <button type="submit" className="w-full rounded-lg bg-amber-500 px-4 py-2.5 text-sm font-semibold text-slate-950 transition hover:bg-amber-400">Approve</button>
+                                </form>
+                              </div>
+                            ) : (
+                              <form method="post" action="index.php?tab=cases" className="space-y-4 border-t border-slate-800 pt-4">
+                                <input type="hidden" name="action" value="review_case" />
+                                <input type="hidden" name="case_id" value={selectedCaseForReview.case_id} />
+                                <input type="hidden" name="case_review_status" value="Declined" />
+                                <input type="hidden" name="_csrf" value={window.ADMIN_CASE_REVIEW_CSRF_TOKEN} />
+                                <div>
+                                  <label htmlFor="case-review-comment" className="mb-1 block text-sm font-medium text-slate-200">Comment explaining the decline <span className="text-amber-400">*</span></label>
+                                  <textarea id="case-review-comment" name="case_review_comment" rows="4" required maxLength="2000" className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm text-white outline-none focus:border-amber-500" placeholder="Explain why this case is declined and provide feedback for Staff."></textarea>
+                                </div>
+                                <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+                                  <button type="button" onClick={() => setCaseDeclineMode(false)} className="rounded-lg border border-slate-700 px-4 py-2.5 text-sm font-medium text-slate-300 transition hover:bg-slate-800">Back</button>
+                                  <button type="submit" className="rounded-lg border border-red-500/40 px-4 py-2.5 text-sm font-semibold text-red-300 transition hover:bg-red-500 hover:text-slate-950">Confirm Decline</button>
+                                </div>
+                              </form>
+                            )}
+                          </div>
+                        </section>
+                      </div>
+                    )}
                   </div>
                 )}
 
@@ -1538,21 +1733,30 @@ function readAdminThemePreference() {
                       <div className="border-b border-slate-800 p-5">
                         <div className="flex flex-wrap items-center justify-between gap-3">
                           <div>
-                            <h3 className="font-bold text-white text-base">Staff Appointment Requests</h3>
-                            <p className="mt-1 text-sm text-slate-400">Review appointments scheduled by staff, adjust the date or time, and confirm them to add them to the court calendar.</p>
+                            <h3 className="font-bold text-white text-base">Pending Appointment Requests</h3>
+                            <p className="mt-1 text-sm text-slate-400">Clients or Staff submit requests. You set or adjust the final date and time, then confirm it. Each appointment reserves 60 minutes; overlapping confirmed appointments are blocked.</p>
                           </div>
                           <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-3 py-1 text-xs font-semibold text-amber-300">
                             {pendingAppointments.length} pending
                           </span>
                         </div>
                       </div>
+                      {window.ADMIN_APPOINTMENT_NOTICE && (
+                        <p role={window.ADMIN_APPOINTMENT_NOTICE.type === 'error' ? 'alert' : 'status'} className={`mx-5 mt-5 rounded-xl border p-4 text-sm ${window.ADMIN_APPOINTMENT_NOTICE.type === 'error' ? 'border-red-500/30 bg-red-500/10 text-red-200' : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'}`}>
+                          {window.ADMIN_APPOINTMENT_NOTICE.message}
+                        </p>
+                      )}
                       <div className="overflow-x-auto">
                         <table className="w-full min-w-[1050px] text-left text-sm text-slate-300">
                           <thead className="bg-slate-950/60 text-xs uppercase text-amber-400/80">
-                            <tr><th className="p-4">Client / Case</th><th className="p-4">Appointment</th><th className="p-4">Requested By</th><th className="p-4">Proposed Date &amp; Time</th><th className="p-4">Attorney Schedule</th></tr>
+                            <tr><th className="p-4">Client / Case</th><th className="p-4">Appointment</th><th className="p-4">Request Source</th><th className="p-4">Requested Date &amp; Time</th><th className="p-4">Set Final Date &amp; Time</th></tr>
                           </thead>
                           <tbody className="divide-y divide-slate-800/60">
-                            {pendingAppointments.filter(matchesSearch).map((appointment) => (
+                            {pendingAppointments.filter(matchesSearch).map((appointment) => {
+                              const appointmentDate = String(appointment.appointment_date).slice(0, 10);
+                              const finalDate = appointmentDate < getLocalDateString() ? getLocalDateString() : appointmentDate;
+                              const dateInputId = `appointment-date-${appointment.appointment_id}`;
+                              return (
                               <tr key={appointment.appointment_id} className="align-top hover:bg-slate-800/40">
                                 <td className="p-4">
                                   <span className="block font-semibold text-white">{appointment.client_name || 'No client'}</span>
@@ -1564,30 +1768,40 @@ function readAdminThemePreference() {
                                 </td>
                                 <td className="p-4">
                                   {appointment.requested_by}
+                                  {appointment.preferred_attorney && <span className="mt-1 block text-xs text-slate-400">Preferred attorney: {appointment.preferred_attorney}</span>}
+                                  {appointment.issue_description && <span className="mt-2 block max-w-xs whitespace-pre-wrap text-xs text-slate-400">{appointment.issue_description}</span>}
                                 </td>
                                 <td className="p-4 whitespace-nowrap text-slate-300">
-                                  {String(appointment.appointment_date).replace('T', ' ')}
+                                  {formatAppointmentDateTime(appointment.appointment_date)}
                                 </td>
                                 <td className="p-4">
-                                  <form method="post" action="index.php?tab=schedule" className="flex items-center gap-2">
+                                  <form method="post" action="index.php?tab=schedule" className="flex flex-col gap-2">
                                     <input type="hidden" name="action" value="confirm_appointment" />
                                     <input type="hidden" name="appointment_id" value={appointment.appointment_id} />
                                     <input type="hidden" name="_csrf" value={window.ADMIN_APPOINTMENT_CSRF_TOKEN} />
-                                    <label className="sr-only" htmlFor={`appointment-date-${appointment.appointment_id}`}>Set appointment date and time for {appointment.title}</label>
+                                    <label className="text-xs text-slate-400" htmlFor={`appointment-date-${appointment.appointment_id}`}>Final date</label>
                                     <input
-                                      id={`appointment-date-${appointment.appointment_id}`}
+                                      id={dateInputId}
                                       name="appointment_date"
-                                      type="datetime-local"
+                                      type="date"
                                       required
-                                      min={new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)}
-                                      defaultValue={String(appointment.appointment_date).replace(' ', 'T').slice(0, 16)}
-                                      className="min-w-[205px] rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white outline-none focus:border-amber-500"
+                                      min={getLocalDateString()}
+                                      defaultValue={finalDate}
+                                      className="min-w-[150px] rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white outline-none focus:border-amber-500"
                                     />
-                                    <button type="submit" className="whitespace-nowrap rounded-lg bg-emerald-500 px-3 py-2 text-xs font-semibold text-slate-950 transition hover:bg-emerald-400">Confirm Appointment</button>
+                                    <span className="text-xs text-slate-400">Final time (12-hour)</span>
+                                    <AppointmentTimeFields
+                                      idPrefix={`schedule-appointment-${appointment.appointment_id}`}
+                                      value={appointment.appointment_date}
+                                      dateInputId={dateInputId}
+                                      dateValue={finalDate}
+                                    />
+                                    <button type="submit" className="mt-1 whitespace-nowrap rounded-lg bg-emerald-500 px-3 py-2 text-xs font-semibold text-slate-950 transition hover:bg-emerald-400">Confirm Appointment</button>
                                   </form>
                                 </td>
                               </tr>
-                            ))}
+                              );
+                            })}
                             {pendingAppointments.filter(matchesSearch).length === 0 && <tr><td colSpan="5" className="p-6 text-center text-slate-400">{pendingAppointments.length === 0 ? 'No staff appointment requests are pending.' : 'No pending appointments match your search.'}</td></tr>}
                           </tbody>
                         </table>
@@ -1596,8 +1810,8 @@ function readAdminThemePreference() {
 
                     <section className="bg-slate-900/80 border border-amber-500/20 rounded-2xl overflow-hidden shadow-xl animate-fade-in">
                       <div className="border-b border-slate-800 p-5">
-                        <h3 className="font-bold text-white text-base">Confirmed Court Calendar</h3>
-                        <p className="mt-1 text-sm text-slate-400">Appointments confirmed by an attorney from staff requests.</p>
+                        <h3 className="font-bold text-white text-base">Upcoming Confirmed Court Calendar</h3>
+                        <p className="mt-1 text-sm text-slate-400">Future appointment dates confirmed from pending Client or Staff requests.</p>
                       </div>
                       <div className="overflow-x-auto">
                         <table className="w-full min-w-[700px] text-left text-sm text-slate-300">
@@ -1609,7 +1823,7 @@ function readAdminThemePreference() {
                               <tr key={appointment.id} className="hover:bg-slate-800/40">
                                 <td className="p-4 font-semibold text-white">{appointment.title}</td>
                                 <td className="p-4">{appointment.case_title}</td>
-                                <td className="p-4 whitespace-nowrap text-slate-300">{String(appointment.appointment_date).replace('T', ' ')}</td>
+                                <td className="p-4 whitespace-nowrap text-slate-300">{formatAppointmentDateTime(appointment.appointment_date)}</td>
                                 <td className="p-4 text-amber-400">{appointment.type}</td>
                                 <td className="p-4"><span className="rounded-full bg-emerald-500/10 px-2.5 py-1 text-xs text-emerald-400">Confirmed</span></td>
                               </tr>
@@ -1620,51 +1834,6 @@ function readAdminThemePreference() {
                       </div>
                     </section>
 
-                    {selectedAppointmentId && (() => {
-                      const appointment = appointmentRequests.find((item) => item.appointment_id === selectedAppointmentId);
-                      if (!appointment) return null;
-                      return (
-                        <div className="fixed inset-0 z-[70] flex items-center justify-center overflow-y-auto bg-black/70 p-4 backdrop-blur-sm" onMouseDown={(event) => { if (event.target === event.currentTarget) closeAppointmentReview(); }}>
-                          <section role="dialog" aria-modal="true" aria-labelledby="appointment-review-title" className="my-auto w-full max-w-2xl overflow-hidden rounded-2xl border border-amber-500/30 bg-slate-900 shadow-2xl">
-                            <div className="flex items-center justify-between border-b border-slate-800 px-6 py-4">
-                              <div>
-                                <h2 id="appointment-review-title" className="text-xl font-bold text-white">Pending Appointment</h2>
-                                <p className="mt-1 text-sm text-slate-400">{appointment.client} · {appointment.title}</p>
-                              </div>
-                              <button type="button" onClick={closeAppointmentReview} aria-label="Close appointment review" className="rounded-lg px-2 py-1 text-2xl leading-none text-slate-400 transition hover:bg-slate-800 hover:text-white">&times;</button>
-                            </div>
-                            <div className="space-y-5 px-6 py-5">
-                              <div className="rounded-xl border border-slate-700 bg-slate-950/70 p-4 text-sm">
-                                <p className="text-xs font-semibold uppercase tracking-wide text-amber-400">Staff proposed</p>
-                                <p className="mt-2 text-white">{appointment.appointment_date}</p>
-                                <p className="mt-1 text-slate-400">{appointment.type} · {appointment.duration || 'Duration not specified'}</p>
-                                {appointment.case_title && <p className="mt-1 text-slate-400">Matter: {appointment.case_title}</p>}
-                                {appointment.notes && <p className="mt-2 whitespace-pre-wrap text-slate-300">{appointment.notes}</p>}
-                              </div>
-                              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                                <div>
-                                  <label htmlFor="attorney-availability-date" className="mb-1 block text-sm font-medium text-slate-200">Available date <span className="text-amber-400">*</span></label>
-                                  <input id="attorney-availability-date" type="date" required value={appointmentAvailabilityDate} onChange={(event) => { setAppointmentAvailabilityDate(event.target.value); setAppointmentDecisionError(''); }} className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm text-white outline-none focus:border-amber-500" />
-                                </div>
-                                <div>
-                                  <label htmlFor="attorney-availability-time" className="mb-1 block text-sm font-medium text-slate-200">Available time <span className="text-amber-400">*</span></label>
-                                  <input id="attorney-availability-time" type="time" required value={appointmentAvailabilityTime} onChange={(event) => { setAppointmentAvailabilityTime(event.target.value); setAppointmentDecisionError(''); }} className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm text-white outline-none focus:border-amber-500" />
-                                </div>
-                              </div>
-                              <div>
-                                <label htmlFor="attorney-appointment-comment" className="mb-1 block text-sm font-medium text-slate-200">Comment for staff</label>
-                                <textarea id="attorney-appointment-comment" rows="3" value={appointmentDecisionComment} onChange={(event) => { setAppointmentDecisionComment(event.target.value); setAppointmentDecisionError(''); }} placeholder="Add instructions, constraints, or context for the staff assistant." className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm text-white outline-none placeholder:text-slate-500 focus:border-amber-500"></textarea>
-                              </div>
-                              {appointmentDecisionError && <p role="alert" className="text-sm text-red-300">{appointmentDecisionError}</p>}
-                              <div className="flex flex-col-reverse gap-3 border-t border-slate-800 pt-4 sm:flex-row sm:justify-end">
-                                <button type="button" onClick={() => saveAppointmentDecision(appointment.appointment_id, 'Reschedule')} className="rounded-lg bg-orange-500/10 px-4 py-2.5 text-sm font-semibold text-orange-300 transition hover:bg-orange-500 hover:text-slate-950">Return Alternative to Staff</button>
-                                <button type="button" onClick={() => saveAppointmentDecision(appointment.appointment_id, 'Approve')} className="rounded-lg bg-emerald-500 px-4 py-2.5 text-sm font-semibold text-slate-950 transition hover:bg-emerald-400">Send to Staff</button>
-                              </div>
-                            </div>
-                          </section>
-                        </div>
-                      );
-                    })()}
                   </div>
                 )}
 
@@ -1762,6 +1931,7 @@ function readAdminThemePreference() {
                   </section>
                 </div>
               )}
+
             </div>
           );
         }

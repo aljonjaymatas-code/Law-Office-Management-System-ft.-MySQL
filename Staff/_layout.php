@@ -1,6 +1,26 @@
 <?php
 function staff_layout_start(string $title, array $user, string $activePage, string $success = '', string $error = '', string $headerAction = '', string $headerActionTarget = ''): void
 {
+    global $pdo;
+
+    $notificationsStatement = $pdo->prepare(
+        'SELECT n.notification_id, n.notification_type, n.document_access_request_id,
+                dar.status AS document_access_request_status,
+                n.title, n.message, n.created_at, n.read_at
+         FROM notifications n
+         LEFT JOIN document_access_requests dar
+           ON dar.request_id = n.document_access_request_id
+         WHERE n.user_id = :user_id
+         ORDER BY n.created_at DESC, n.notification_id DESC
+         LIMIT 50'
+    );
+    $notificationsStatement->execute(['user_id' => (int) $user['user_id']]);
+    $notifications = $notificationsStatement->fetchAll();
+    $unreadNotifications = count(array_filter(
+        $notifications,
+        static fn (array $notification): bool => $notification['read_at'] === null
+    ));
+
     $navigation = [
         'index.php'         => ['Dashboard', 'layout-dashboard'],
         'clients.php'       => ['Clients', 'users-round'],
@@ -86,15 +106,48 @@ function staff_layout_start(string $title, array $user, string $activePage, stri
                             class="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-slate-700 bg-slate-950 text-amber-400 transition hover:border-amber-500/60 hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-amber-500"
                             data-header-popover-toggle>
                             <i data-lucide="bell" class="h-5 w-5"></i>
+                            <?php if ($unreadNotifications > 0): ?>
+                                <span data-notification-badge class="absolute -right-1 -top-1 inline-flex h-5 min-w-5 items-center justify-center rounded-full border-2 border-slate-900 bg-red-500 px-1 text-[10px] font-bold text-white"><?php echo $unreadNotifications; ?></span>
+                            <?php endif; ?>
                         </button>
                         <section
                             id="staff-notifications-panel"
                             aria-label="Notifications"
-                            class="absolute right-0 top-full z-50 mt-3 w-72 rounded-xl border border-slate-700 bg-slate-900 p-4 text-left shadow-2xl"
+                            class="absolute right-0 top-full z-50 mt-3 w-[min(22rem,90vw)] overflow-hidden rounded-xl border border-slate-700 bg-slate-900 text-left shadow-2xl"
                             data-header-popover-panel
                             hidden>
-                            <h2 class="text-sm font-semibold text-white">Notifications</h2>
-                            <p class="mt-2 text-sm text-slate-400" role="status">You’re all caught up. There are no notifications yet.</p>
+                            <div class="flex items-center justify-between border-b border-slate-800 px-4 py-3">
+                                <h2 class="text-sm font-semibold text-white">Notifications</h2>
+                                <button type="button" class="text-xs font-medium text-amber-300 hover:text-amber-200" data-notification-mark-all <?php echo $unreadNotifications === 0 ? 'hidden' : ''; ?>>Mark all read</button>
+                            </div>
+                            <p class="hidden px-4 py-2 text-xs text-red-300" role="alert" data-notification-error></p>
+                            <div class="max-h-80 overflow-y-auto" data-notification-list data-csrf="<?php echo staff_h(staff_csrf_token()); ?>">
+                                <?php if ($notifications === []): ?>
+                                    <p class="px-4 py-6 text-center text-sm text-slate-400" role="status">You’re all caught up. There are no notifications yet.</p>
+                                <?php else: foreach ($notifications as $notification): ?>
+                                    <div
+                                        data-notification-id="<?php echo (int) $notification['notification_id']; ?>"
+                                        data-notification-read="<?php echo $notification['read_at'] !== null ? 'true' : 'false'; ?>"
+                                        class="border-b border-slate-800 px-4 py-3 transition hover:bg-slate-800/70 <?php echo $notification['read_at'] === null ? 'bg-amber-500/5' : 'opacity-70'; ?>">
+                                        <span class="flex items-start justify-between gap-3">
+                                            <span class="text-sm font-semibold text-white"><?php echo staff_h($notification['title']); ?></span>
+                                            <?php if ($notification['read_at'] === null): ?><span class="mt-1 h-2 w-2 shrink-0 rounded-full bg-amber-400"></span><?php endif; ?>
+                                        </span>
+                                        <span class="mt-1 block text-xs text-slate-300"><?php echo staff_h($notification['message']); ?></span>
+                                        <span class="mt-1 block text-[10px] text-slate-500"><?php echo staff_h(date('M j, Y g:i A', strtotime($notification['created_at']))); ?></span>
+                                        <?php if ($notification['notification_type'] === 'document_access_requested' && $notification['document_access_request_status'] === 'Pending'): ?>
+                                            <span class="mt-3 flex gap-2">
+                                                <button type="button" data-request-decision="Approved" data-request-id="<?php echo (int) $notification['document_access_request_id']; ?>" class="rounded-md bg-emerald-500 px-3 py-1.5 text-xs font-semibold text-slate-950 transition hover:bg-emerald-400">Approve</button>
+                                                <button type="button" data-request-decision="Declined" data-request-id="<?php echo (int) $notification['document_access_request_id']; ?>" class="rounded-md bg-red-500 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-red-400">Decline</button>
+                                            </span>
+                                        <?php elseif ($notification['notification_type'] === 'document_access_requested' && $notification['document_access_request_status'] !== null): ?>
+                                            <span class="mt-2 block text-xs font-semibold <?php echo $notification['document_access_request_status'] === 'Approved' ? 'text-emerald-300' : 'text-red-300'; ?>">
+                                                Request <?php echo staff_h(strtolower((string) $notification['document_access_request_status'])); ?>
+                                            </span>
+                                        <?php endif; ?>
+                                    </div>
+                                <?php endforeach; endif; ?>
+                            </div>
                         </section>
                     </div>
                     <div class="relative" data-header-popover>
@@ -206,6 +259,185 @@ function staff_layout_end(): void
         <script src="../JS/phone-input.js"></script>
         <script>
             if (window.lucide) window.lucide.createIcons();
+
+            (() => {
+                const notificationList = document.querySelector('[data-notification-list]');
+                const notificationError = document.querySelector('[data-notification-error]');
+                const notificationToggle = document.querySelector('[aria-controls="staff-notifications-panel"]');
+                const markAllButton = document.querySelector('[data-notification-mark-all]');
+                const renderNotifications = (notifications) => {
+                    if (!notificationList) return;
+                    notificationList.replaceChildren();
+                    if (notifications.length === 0) {
+                        const emptyState = document.createElement('p');
+                        emptyState.className = 'px-4 py-6 text-center text-sm text-slate-400';
+                        emptyState.setAttribute('role', 'status');
+                        emptyState.textContent = 'You’re all caught up. There are no notifications yet.';
+                        notificationList.append(emptyState);
+                    }
+                    notifications.forEach((notification) => {
+                        const button = document.createElement('button');
+                        const item = document.createElement('div');
+                        item.dataset.notificationId = String(notification.notification_id);
+                        item.dataset.notificationRead = notification.read ? 'true' : 'false';
+                        item.className = `border-b border-slate-800 px-4 py-3 transition hover:bg-slate-800/70 ${notification.read ? 'opacity-70' : 'bg-amber-500/5'}`;
+                        button.type = 'button';
+                        button.className = 'block w-full text-left';
+                        const heading = document.createElement('span');
+                        heading.className = 'flex items-start justify-between gap-3';
+                        const title = document.createElement('span');
+                        title.className = 'text-sm font-semibold text-white';
+                        title.textContent = notification.title;
+                        heading.append(title);
+                        if (!notification.read) {
+                            const unreadDot = document.createElement('span');
+                            unreadDot.className = 'mt-1 h-2 w-2 shrink-0 rounded-full bg-amber-400';
+                            heading.append(unreadDot);
+                        }
+                        const message = document.createElement('span');
+                        message.className = 'mt-1 block text-xs text-slate-300';
+                        message.textContent = notification.message;
+                        const createdAt = document.createElement('span');
+                        createdAt.className = 'mt-1 block text-[10px] text-slate-500';
+                        createdAt.textContent = new Date(String(notification.created_at).replace(' ', 'T')).toLocaleString();
+                        button.append(heading, message, createdAt);
+                        item.append(button);
+                        if (
+                            notification.notification_type === 'document_access_requested'
+                            && notification.document_access_request_id
+                            && notification.document_access_request_status === 'Pending'
+                        ) {
+                            const actions = document.createElement('div');
+                            actions.className = 'mt-3 flex gap-2';
+                            [
+                                { decision: 'Approved', label: 'Approve', style: 'bg-emerald-500 text-slate-950 hover:bg-emerald-400' },
+                                { decision: 'Declined', label: 'Decline', style: 'bg-red-500 text-white hover:bg-red-400' }
+                            ].forEach(({ decision, label, style }) => {
+                                const actionButton = document.createElement('button');
+                                actionButton.type = 'button';
+                                actionButton.dataset.requestDecision = decision;
+                                actionButton.dataset.requestId = String(notification.document_access_request_id);
+                                actionButton.className = `rounded-md px-3 py-1.5 text-xs font-semibold transition ${style}`;
+                                actionButton.textContent = label;
+                                actions.append(actionButton);
+                            });
+                            item.append(actions);
+                        } else if (
+                            notification.notification_type === 'document_access_requested'
+                            && notification.document_access_request_status
+                        ) {
+                            const outcome = document.createElement('span');
+                            outcome.className = `mt-2 block text-xs font-semibold ${notification.document_access_request_status === 'Approved' ? 'text-emerald-300' : 'text-red-300'}`;
+                            outcome.textContent = `Request ${notification.document_access_request_status.toLowerCase()}`;
+                            item.append(outcome);
+                        }
+                        notificationList.append(item);
+                    });
+                    const unreadCount = notifications.filter((notification) => !notification.read).length;
+                    markAllButton?.toggleAttribute('hidden', unreadCount === 0);
+                    if (notificationToggle) {
+                        let badge = notificationToggle.querySelector('[data-notification-badge]');
+                        if (unreadCount === 0) {
+                            badge?.remove();
+                        } else {
+                            if (!badge) {
+                                badge = document.createElement('span');
+                                badge.dataset.notificationBadge = '';
+                                badge.className = 'absolute -right-1 -top-1 inline-flex h-5 min-w-5 items-center justify-center rounded-full border-2 border-slate-900 bg-red-500 px-1 text-[10px] font-bold text-white';
+                                notificationToggle.append(badge);
+                            }
+                            badge.textContent = String(unreadCount);
+                        }
+                    }
+                };
+                const refreshNotifications = async () => {
+                    try {
+                        const response = await fetch('../notification-read.php?portal=staff');
+                        const result = await response.json();
+                        if (!response.ok || !Array.isArray(result.notifications)) {
+                            throw new Error(result.error || 'Unable to load notifications.');
+                        }
+                        renderNotifications(result.notifications);
+                        notificationError?.classList.add('hidden');
+                    } catch (error) {
+                        if (notificationError) {
+                            notificationError.textContent = error.message;
+                            notificationError.classList.remove('hidden');
+                        }
+                    }
+                };
+                const updateNotification = async (notificationId = null) => {
+                    if (!notificationList) return;
+                    const body = new URLSearchParams({
+                        portal: 'staff',
+                        _csrf: notificationList.dataset.csrf,
+                        action: notificationId === null ? 'mark_all_read' : 'mark_read'
+                    });
+                    if (notificationId !== null) body.set('notification_id', notificationId);
+                    try {
+                        const response = await fetch('../notification-read.php?portal=staff', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+                            body
+                        });
+                        const result = await response.json();
+                        if (!response.ok || !result.success) throw new Error(result.error || 'Unable to update notifications.');
+                        if (notificationError) notificationError.classList.add('hidden');
+                        await refreshNotifications();
+                    } catch (error) {
+                        if (notificationError) {
+                            notificationError.textContent = error.message;
+                            notificationError.classList.remove('hidden');
+                        }
+                    }
+                };
+                const decideDocumentAccessRequest = async (requestId, decision, button) => {
+                    if (!notificationList) return;
+                    button.disabled = true;
+                    const body = new URLSearchParams({
+                        _csrf: notificationList.dataset.csrf,
+                        request_id: requestId,
+                        decision
+                    });
+                    try {
+                        const response = await fetch('document-access-request.php', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+                            body
+                        });
+                        const result = await response.json();
+                        if (!response.ok || !result.success) throw new Error(result.error || 'Unable to update document access.');
+                        notificationError?.classList.add('hidden');
+                        await refreshNotifications();
+                    } catch (error) {
+                        button.disabled = false;
+                        if (notificationError) {
+                            notificationError.textContent = error.message;
+                            notificationError.classList.remove('hidden');
+                        }
+                    }
+                };
+                markAllButton?.addEventListener('click', () => updateNotification());
+                notificationList?.addEventListener('click', (event) => {
+                    const decisionButton = event.target.closest('[data-request-decision]');
+                    if (decisionButton) {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        decideDocumentAccessRequest(
+                            decisionButton.dataset.requestId,
+                            decisionButton.dataset.requestDecision,
+                            decisionButton
+                        );
+                        return;
+                    }
+                    const notification = event.target.closest('[data-notification-id]');
+                    if (notification?.dataset.notificationRead === 'false') {
+                        updateNotification(notification.dataset.notificationId);
+                    }
+                });
+                refreshNotifications();
+                window.setInterval(refreshNotifications, 15000);
+            })();
 
             (() => {
                 const groups = [...document.querySelectorAll('[data-header-popover]')];

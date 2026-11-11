@@ -1,10 +1,106 @@
 <?php
 require_once __DIR__ . '/_bootstrap.php';
+require_once __DIR__ . '/../config/notifications.php';
 
 $user = client_current_user($pdo);
 if ($user === null) {
     unset($_SESSION['client_user_id']);
     header('Location: login.php');
+    exit;
+}
+
+$attorneysStatement = $pdo->query(
+    "SELECT user_id, username, email
+     FROM users
+     WHERE LOWER(TRIM(role)) IN ('lawyer', 'attorney')
+     ORDER BY username ASC, user_id ASC"
+);
+$attorneys = $attorneysStatement->fetchAll();
+
+if (
+    $_SERVER['REQUEST_METHOD'] === 'POST'
+    && ($_POST['action'] ?? '') === 'request_document_access'
+) {
+    header('Content-Type: application/json; charset=utf-8');
+    header('Cache-Control: no-store, private');
+    $documentId = filter_var($_POST['document_id'] ?? null, FILTER_VALIDATE_INT);
+
+    if (!client_csrf_is_valid($_POST['_csrf'] ?? null)) {
+        http_response_code(403);
+        echo json_encode(['error' => 'Your session expired. Refresh the page and try again.']);
+        exit;
+    }
+    if ($documentId === false || $documentId === null || $documentId < 1) {
+        http_response_code(400);
+        echo json_encode(['error' => 'Select a valid case document.']);
+        exit;
+    }
+
+    $pdo->beginTransaction();
+    try {
+        $documentStatement = $pdo->prepare(
+            'SELECT d.document_id, d.document_name, c.title AS case_title
+             FROM documents d
+             INNER JOIN cases c ON c.case_id = d.case_id
+             WHERE d.document_id = :document_id AND c.client_id = :client_id
+             FOR UPDATE'
+        );
+        $documentStatement->execute([
+            'document_id' => $documentId,
+            'client_id' => (int) $user['client_id'],
+        ]);
+        $document = $documentStatement->fetch();
+
+        if (!is_array($document)) {
+            $pdo->rollBack();
+            http_response_code(404);
+            echo json_encode(['error' => 'The requested document was not found for your case.']);
+            exit;
+        }
+
+        $pendingRequest = $pdo->prepare(
+            "SELECT request_id
+             FROM document_access_requests
+             WHERE document_id = :document_id
+               AND client_id = :client_id
+               AND status = 'Pending'
+             ORDER BY request_id DESC
+             LIMIT 1"
+        );
+        $pendingRequest->execute([
+            'document_id' => $documentId,
+            'client_id' => (int) $user['client_id'],
+        ]);
+
+        if ($pendingRequest->fetchColumn() === false) {
+            $requestInsert = $pdo->prepare(
+                "INSERT INTO document_access_requests (document_id, client_id, status)
+                 VALUES (:document_id, :client_id, 'Pending')"
+            );
+            $requestInsert->execute([
+                'document_id' => $documentId,
+                'client_id' => (int) $user['client_id'],
+            ]);
+            $requestId = (int) $pdo->lastInsertId();
+            create_staff_notifications(
+                $pdo,
+                null,
+                'document_access_requested',
+                'Client requested document access',
+                $user['fullname'] . ' requested access to "' . $document['document_name']
+                    . '" for case ' . $document['case_title'] . '.',
+                $requestId
+            );
+        }
+
+        $pdo->commit();
+        echo json_encode(['success' => true, 'access_status' => 'Requested']);
+    } catch (Throwable $exception) {
+        if ($pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        throw $exception;
+    }
     exit;
 }
 
@@ -30,7 +126,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $dateErrors = DateTime::getLastErrors();
     $matterType = is_string($matterTypeInput) ? trim($matterTypeInput) : '';
     $otherMatter = is_string($otherMatterInput) ? trim($otherMatterInput) : '';
-    $preferredAttorney = is_string($preferredAttorneyInput) ? trim($preferredAttorneyInput) : '';
+    $preferredAttorneySelection = is_string($preferredAttorneyInput) ? trim($preferredAttorneyInput) : null;
+    $preferredAttorney = '';
+    $selectedAttorneyIsValid = $preferredAttorneySelection === '';
+    foreach ($attorneys as $attorney) {
+        if (
+            $preferredAttorneySelection !== null
+            && $preferredAttorneySelection !== ''
+            && (string) $attorney['user_id'] === $preferredAttorneySelection
+        ) {
+            $preferredAttorney = (string) $attorney['username'];
+            $selectedAttorneyIsValid = true;
+            break;
+        }
+    }
     $issueDescription = is_string($issueDescriptionInput) ? trim($issueDescriptionInput) : '';
     $allowedTypes = ['Family Law', 'Criminal Law', 'Real Estate Law', 'Business Law', 'Other'];
     $appointmentType = $matterType === 'Other' ? $otherMatter : $matterType;
@@ -38,7 +147,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         'matter_type' => in_array($matterType, $allowedTypes, true) ? $matterType : 'Family Law',
         'other_matter' => $otherMatter,
         'appointment_date' => is_string($appointmentDateInput) ? $appointmentDateInput : '',
-        'preferred_attorney' => $preferredAttorney,
+        'preferred_attorney' => $preferredAttorneySelection ?? '',
         'issue_description' => $issueDescription,
         'confirmed' => ($_POST['confirmed'] ?? null) === '1',
     ];
@@ -58,12 +167,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         || !in_array($matterType, $allowedTypes, true)
         || $appointmentType === ''
         || strlen($appointmentType) > 50
-        || strlen($preferredAttorney) > 150
+        || !$selectedAttorneyIsValid
         || strlen($issueDescription) > 2000
     ) {
-        $appointmentNotice = 'Confirm the terms, select a valid legal matter type, and keep the optional details within their length limits.';
+        $appointmentNotice = !$selectedAttorneyIsValid
+            ? 'Choose an Attorney from the available list, or leave the field blank.'
+            : 'Confirm the terms, select a valid legal matter type, and keep the optional details within their length limits.';
         $appointmentNoticeType = 'error';
     } else {
+        $pdo->beginTransaction();
         $insert = $pdo->prepare(
             'INSERT INTO appointments (
                 case_id, client_id, user_id, title, appointment_date, type, status,
@@ -81,6 +193,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             'preferred_attorney' => $preferredAttorney !== '' ? $preferredAttorney : null,
             'issue_description' => $issueDescription !== '' ? $issueDescription : null,
         ]);
+        create_staff_notifications(
+            $pdo,
+            (int) $pdo->lastInsertId(),
+            'appointment_requested',
+            'New appointment request',
+            $user['fullname'] . ' requested ' . $appointmentType . ' on ' . $appointmentDate->format('M j, Y g:i A') . '.'
+        );
+        $pdo->commit();
         $_SESSION['client_flash'] = 'Appointment request sent to the staff. It is pending confirmation.';
         header('Location: index.php');
         exit;
@@ -108,15 +228,44 @@ $appointmentsStatement = $pdo->prepare(
 );
 $appointmentsStatement->execute(['client_id' => (int) $user['client_id']]);
 $upcomingAppointments = $appointmentsStatement->fetchAll();
+$notificationsStatement = $pdo->prepare(
+    'SELECT notification_id, notification_type, title, message, created_at, read_at
+     FROM notifications
+     WHERE user_id = :user_id
+     ORDER BY created_at DESC, notification_id DESC
+     LIMIT 50'
+);
+$notificationsStatement->execute(['user_id' => (int) $user['user_id']]);
+$portalNotifications = array_map(
+    static function (array $notification): array {
+        $notification['notification_id'] = (int) $notification['notification_id'];
+        $notification['read'] = $notification['read_at'] !== null;
+        return $notification;
+    },
+    $notificationsStatement->fetchAll()
+);
 
 $documentsStatement = $pdo->prepare(
-    'SELECT d.document_id, d.document_name, d.upload_date, c.title AS case_title
+    "SELECT d.document_id, d.document_name, d.upload_date, c.title AS case_title,
+            COALESCE(
+                (
+                    SELECT dar.status
+                    FROM document_access_requests dar
+                    WHERE dar.document_id = d.document_id AND dar.client_id = :document_client_id
+                    ORDER BY dar.request_id DESC
+                    LIMIT 1
+                ),
+                'Locked'
+            ) AS access_status
      FROM documents d
      INNER JOIN cases c ON c.case_id = d.case_id
-     WHERE c.client_id = :client_id
-     ORDER BY d.upload_date DESC, d.document_id DESC'
+     WHERE c.client_id = :case_client_id
+     ORDER BY d.upload_date DESC, d.document_id DESC"
 );
-$documentsStatement->execute(['client_id' => (int) $user['client_id']]);
+$documentsStatement->execute([
+    'document_client_id' => (int) $user['client_id'],
+    'case_client_id' => (int) $user['client_id'],
+]);
 $documents = array_map(
     static function (array $document): array {
         return [
@@ -124,7 +273,7 @@ $documents = array_map(
             'document_name' => $document['document_name'],
             'category' => 'Case File: ' . $document['case_title'],
             'upload_date' => $document['upload_date'],
-            'access_status' => 'Locked',
+            'access_status' => $document['access_status'],
             'preview' => [
                 'Confidential case document',
                 $document['case_title'],
@@ -144,11 +293,22 @@ $clientPortalData = [
         'address' => $user['address'] ?? '',
     ],
     'activeCases' => $activeCases,
+    'attorneys' => array_map(
+        static function (array $attorney): array {
+            return [
+                'user_id' => (int) $attorney['user_id'],
+                'username' => $attorney['username'],
+                'email' => $attorney['email'],
+            ];
+        },
+        $attorneys
+    ),
     'upcomingAppointments' => $upcomingAppointments,
     'appointmentNotice' => $appointmentNotice,
     'appointmentNoticeType' => $appointmentNoticeType,
     'appointmentFormValues' => $appointmentFormValues,
     'csrfToken' => client_csrf_token(),
+    'notifications' => $portalNotifications,
     'documents' => $documents,
 ];
 

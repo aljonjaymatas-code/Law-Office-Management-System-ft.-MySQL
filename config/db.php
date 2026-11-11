@@ -1,5 +1,7 @@
 <?php
 
+date_default_timezone_set('Asia/Manila');
+
 $envPath = dirname(__DIR__) . DIRECTORY_SEPARATOR . '.env';
 if (is_file($envPath) && is_readable($envPath)) {
     foreach (file($envPath, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) as $line) {
@@ -61,6 +63,7 @@ try {
         PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
         PDO::ATTR_EMULATE_PREPARES => false,
     ]);
+    $pdo->exec("SET time_zone = '+08:00'");
 } catch (PDOException $exception) {
     error_log('MySQL/MariaDB connection failed: ' . $exception->getMessage());
     http_response_code(500);

@@ -1,5 +1,4 @@
 const { useState, useEffect, useRef } = React;
-const ACCESS_REQUESTS_KEY = 'law-office-document-access-requests';
 const portalData = window.CLIENT_PORTAL_DATA || {};
 const CLIENT_THEMES = [
   { id: 'amber', name: 'Classic Amber', color: '#f59e0b' },
@@ -7,25 +6,15 @@ const CLIENT_THEMES = [
   { id: 'emerald', name: 'Emerald', color: '#34d399' },
 ];
 
-function readDocumentAccessRequests() {
-  const savedRequests = window.localStorage.getItem(ACCESS_REQUESTS_KEY);
-  if (!savedRequests) return [];
-  try {
-    const requests = JSON.parse(savedRequests);
-    return Array.isArray(requests) ? requests : [];
-  } catch (error) {
-    console.error('Unable to read document access requests from browser storage.', error);
-    return [];
-  }
-}
-
 function ClientPortal() {
   const currentView = 'dashboard';
   const [isScheduleModalOpen, setIsScheduleModalOpen] = useState(portalData.appointmentNoticeType === 'error');
   const [selectedDocument, setSelectedDocument] = useState(null);
   const [documentRequestNotice, setDocumentRequestNotice] = useState('');
-  const [documentAccessRequests, setDocumentAccessRequests] = useState(readDocumentAccessRequests);
+  const [documentRequestInProgress, setDocumentRequestInProgress] = useState(null);
   const [activeHeaderPopover, setActiveHeaderPopover] = useState(null);
+  const [notifications, setNotifications] = useState(Array.isArray(portalData.notifications) ? portalData.notifications : []);
+  const [notificationError, setNotificationError] = useState('');
   const [profileView, setProfileView] = useState('menu');
   const [theme, setTheme] = useState(document.documentElement.dataset.clientTheme || 'amber');
   const [themeStorageError, setThemeStorageError] = useState(false);
@@ -33,6 +22,7 @@ function ClientPortal() {
   const clientProfile = portalData.profile;
   const activeCases = portalData.activeCases;
   const upcomingAppointments = portalData.upcomingAppointments;
+  const attorneys = Array.isArray(portalData.attorneys) ? portalData.attorneys : [];
   const [caseDocuments, setCaseDocuments] = useState(portalData.documents);
 
   // State for the Appointment Form
@@ -49,7 +39,7 @@ function ClientPortal() {
     if (window.lucide) {
       window.lucide.createIcons();
     }
-  }, [isScheduleModalOpen, selectedDocument, documentAccessRequests]);
+  }, [isScheduleModalOpen, selectedDocument]);
 
   useEffect(() => {
     if (!activeHeaderPopover) return undefined;
@@ -81,13 +71,59 @@ function ClientPortal() {
     }
   };
 
+  const updateNotificationReadState = async (notificationId = null) => {
+    const body = new URLSearchParams({
+      _csrf: portalData.csrfToken,
+      portal: 'client',
+      action: notificationId === null ? 'mark_all_read' : 'mark_read',
+    });
+    if (notificationId !== null) body.set('notification_id', String(notificationId));
+    try {
+      const response = await fetch('../notification-read.php', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+        body,
+      });
+      const result = await response.json();
+      if (!response.ok || !result.success) throw new Error(result.error || 'Unable to update notifications.');
+      setNotifications((current) => current.map((notification) => (
+        notificationId === null || notification.notification_id === notificationId
+          ? { ...notification, read: true }
+          : notification
+      )));
+      setNotificationError('');
+    } catch (error) {
+      console.error('Unable to update appointment notifications.', error);
+      setNotificationError(error.message);
+    }
+  };
+
   useEffect(() => {
-    const syncDocumentRequests = (event) => {
-      if (event.key !== ACCESS_REQUESTS_KEY) return;
-      setDocumentAccessRequests(readDocumentAccessRequests());
+    let active = true;
+    const refreshNotifications = async () => {
+      try {
+        const response = await fetch('../notification-read.php?portal=client');
+        const result = await response.json();
+        if (!response.ok || !Array.isArray(result.notifications)) {
+          throw new Error(result.error || 'Unable to load notifications.');
+        }
+        if (active) {
+          setNotifications(result.notifications);
+          setNotificationError('');
+        }
+      } catch (error) {
+        if (active) {
+          console.error('Unable to load appointment notifications.', error);
+          setNotificationError(error.message);
+        }
+      }
     };
-    window.addEventListener('storage', syncDocumentRequests);
-    return () => window.removeEventListener('storage', syncDocumentRequests);
+    refreshNotifications();
+    const timer = window.setInterval(refreshNotifications, 15000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
   }, []);
 
   useEffect(() => {
@@ -104,30 +140,35 @@ function ClientPortal() {
     return () => window.removeEventListener('keydown', preventPrint);
   }, [selectedDocument]);
 
-  const handleAccessRequest = (documentId) => {
+  const handleAccessRequest = async (documentId) => {
     const document = caseDocuments.find((doc) => doc.document_id === documentId);
     if (!document) return;
-    const request = {
-      request_id: `${clientProfile.email}-${document.document_id}`,
-      document_id: document.document_id,
-      document_name: document.document_name,
-      category: document.category,
-      client_name: clientProfile.fullname,
-      client_email: clientProfile.email,
-      requested_at: new Date().toISOString(),
-      status: 'Pending'
-    };
-    const updatedRequests = [
-      ...documentAccessRequests.filter((item) => item.request_id !== request.request_id),
-      request
-    ];
+    setDocumentRequestInProgress(documentId);
+    setDocumentRequestNotice('');
     try {
-      window.localStorage.setItem(ACCESS_REQUESTS_KEY, JSON.stringify(updatedRequests));
-      setDocumentAccessRequests(updatedRequests);
+      const body = new URLSearchParams({
+        _csrf: portalData.csrfToken,
+        action: 'request_document_access',
+        document_id: String(documentId),
+      });
+      const response = await fetch('index.php', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+        body,
+      });
+      const result = await response.json();
+      if (!response.ok || !result.success) {
+        throw new Error(result.error || 'Unable to send the access request.');
+      }
+      setCaseDocuments((currentDocuments) => currentDocuments.map((item) => (
+        item.document_id === documentId ? { ...item, access_status: result.access_status } : item
+      )));
       setDocumentRequestNotice('Your access request was sent to the Staff portal.');
     } catch (error) {
       console.error('Unable to save the document access request.', error);
-      setDocumentRequestNotice('Unable to send the request. Please check browser storage and try again.');
+      setDocumentRequestNotice(error.message || 'Unable to send the request. Please try again.');
+    } finally {
+      setDocumentRequestInProgress(null);
     }
   };
 
@@ -314,15 +355,20 @@ function ClientPortal() {
         <div ref={headerActionsRef} className="relative flex shrink-0 items-center gap-2">
           <button
             type="button"
-            aria-label="Notifications"
+            aria-label={`Notifications${notifications.filter((notification) => !notification.read).length ? `, ${notifications.filter((notification) => !notification.read).length} unread` : ''}`}
             aria-expanded={activeHeaderPopover === 'notifications'}
             aria-controls="client-notifications-popover"
             onClick={() => setActiveHeaderPopover((current) => current === 'notifications' ? null : 'notifications')}
-            className="flex h-10 w-10 items-center justify-center rounded-xl border border-slate-700 bg-slate-800 text-slate-300 transition hover:border-amber-500/40 hover:text-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-500">
+            className="relative flex h-10 w-10 items-center justify-center rounded-xl border border-slate-700 bg-slate-800 text-slate-300 transition hover:border-amber-500/40 hover:text-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-500">
             <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5">
               <path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"></path>
               <path d="M10 21h4"></path>
             </svg>
+            {notifications.some((notification) => !notification.read) && (
+              <span className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full border-2 border-slate-900 bg-red-500 px-1 text-[10px] font-bold text-white">
+                {notifications.filter((notification) => !notification.read).length}
+              </span>
+            )}
           </button>
           <button
             type="button"
@@ -345,10 +391,33 @@ function ClientPortal() {
               id="client-notifications-popover"
               aria-label="Notifications"
               className="absolute right-0 top-full z-50 mt-2 w-72 rounded-2xl border border-slate-700 bg-slate-900 p-4 shadow-2xl">
-              <h2 className="text-sm font-semibold text-white">Notifications</h2>
-              <p role="status" className="mt-3 rounded-xl border border-slate-800 bg-slate-950/60 p-4 text-center text-sm text-slate-400">
-                You’re all caught up. New updates will appear here.
-              </p>
+              <div className="flex items-center justify-between gap-2">
+                <h2 className="text-sm font-semibold text-white">Notifications</h2>
+                {notifications.some((notification) => !notification.read) && (
+                  <button type="button" onClick={() => updateNotificationReadState()} className="text-xs font-medium text-amber-300 hover:text-amber-200">Mark all read</button>
+                )}
+              </div>
+              {notificationError && <p role="alert" className="mt-2 text-xs text-red-300">{notificationError}</p>}
+              <div className="mt-3 max-h-80 overflow-y-auto">
+                {notifications.length ? notifications.map((notification) => (
+                  <button
+                    key={notification.notification_id}
+                    type="button"
+                    onClick={() => !notification.read && updateNotificationReadState(notification.notification_id)}
+                    className={`block w-full border-b border-slate-800 px-2 py-3 text-left transition hover:bg-slate-800/70 ${notification.read ? 'opacity-70' : 'bg-amber-500/5'}`}>
+                    <span className="flex items-start justify-between gap-3">
+                      <span className="text-sm font-semibold text-white">{notification.title}</span>
+                      {!notification.read && <span className="mt-1 h-2 w-2 shrink-0 rounded-full bg-amber-400"></span>}
+                    </span>
+                    <span className="mt-1 block text-xs text-slate-300">{notification.message}</span>
+                    <span className="mt-1 block text-[10px] text-slate-500">{new Date(notification.created_at.replace(' ', 'T')).toLocaleString()}</span>
+                  </button>
+                )) : (
+                  <p role="status" className="rounded-xl border border-slate-800 bg-slate-950/60 p-4 text-center text-sm text-slate-400">
+                    You’re all caught up. New updates will appear here.
+                  </p>
+                )}
+              </div>
             </section>
           )}
 
@@ -550,6 +619,7 @@ function ClientPortal() {
                 <h3 className="font-bold text-white text-base tracking-wide">Upcoming Appointments</h3>
               </div>
             </div>
+            <p className="px-5 pt-4 text-sm text-slate-400">Your requested date stays Pending until an Attorney confirms the final appointment time. Confirmed appointments are shown here.</p>
             <div className="overflow-x-auto">
               <table className="w-full text-left text-sm text-slate-300">
                 <thead className="bg-slate-950/60 text-amber-400/80 uppercase text-xs tracking-wider">
@@ -592,7 +662,7 @@ function ClientPortal() {
                 <i data-lucide="file-text" className="w-5 h-5 text-amber-400"></i>
                 <h3 className="font-bold text-white text-base tracking-wide">My Shared Documents &amp; Files</h3>
               </div>
-              <p className="mt-2 text-sm text-slate-400">Files related to your case. Request access to view confidential documents. Requests sync with the Staff portal in this browser only; documents are sample records.</p>
+              <p className="mt-2 text-sm text-slate-400">Files related to your case. Request access to view confidential documents. Your request is sent to Staff and saved in the office database.</p>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-left text-sm text-slate-300">
@@ -606,14 +676,11 @@ function ClientPortal() {
                 </thead>
                 <tbody className="divide-y divide-slate-800/60">
                   {caseDocuments.map((doc) => {
-                    const request = documentAccessRequests.find((item) => (
-                      item.document_id === doc.document_id && item.client_email === clientProfile.email
-                    ));
-                    const accessStatus = request
-                      ? request.status === 'Approved' ? 'Available'
-                        : request.status === 'Pending' ? 'Requested'
-                          : 'Locked'
-                      : doc.access_status;
+                    const accessStatus = doc.access_status === 'Approved'
+                      ? 'Available'
+                      : doc.access_status === 'Pending'
+                        ? 'Requested'
+                        : doc.access_status;
                     return (
                       <tr key={doc.document_id} className="hover:bg-slate-800/40 transition">
                         <td className="p-4 font-medium text-white flex items-center gap-2">
@@ -648,10 +715,11 @@ function ClientPortal() {
                           ) : (
                             <button
                               type="button"
+                              disabled={documentRequestInProgress === doc.document_id}
                               onClick={() => handleAccessRequest(doc.document_id)}
-                              className="inline-flex items-center gap-1 rounded-lg bg-amber-500/10 px-3 py-1.5 text-xs font-semibold text-amber-300 shadow-sm transition hover:bg-amber-500 hover:text-slate-950"
+                              className="inline-flex items-center gap-1 rounded-lg bg-amber-500 px-3 py-1.5 text-xs font-semibold text-slate-950 shadow-sm transition hover:bg-amber-400 disabled:cursor-wait disabled:opacity-60"
                             >
-                              Request View Access
+                              {documentRequestInProgress === doc.document_id ? 'Sending…' : 'Request View Access'}
                             </button>
                           )}
                         </td>
@@ -815,16 +883,21 @@ function ClientPortal() {
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-3">
                   <div>
                     <label htmlFor="preferred-attorney" className="block text-xs text-slate-400 mb-1">Preferred Attorney (if any):</label>
-                    <input
+                    <select
                       id="preferred-attorney"
                       name="preferred_attorney"
-                      type="text"
-                      maxLength={150}
-                      placeholder="e.g. Atty. Smith"
+                      aria-label="Preferred Attorney (optional)"
                       value={appointmentFormData.preferred_attorney}
                       onChange={(e) => setAppointmentFormData({...appointmentFormData, preferred_attorney: e.target.value})}
                       className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-amber-500"
-                    />
+                    >
+                      <option value="">No preference</option>
+                      {attorneys.map((attorney) => (
+                        <option key={attorney.user_id} value={String(attorney.user_id)}>
+                          {attorney.username}{attorney.email ? ` (${attorney.email})` : ''}
+                        </option>
+                      ))}
+                    </select>
 
                     <label className="block text-xs text-slate-400 mt-4 mb-2">Type of Legal Matter (Check one):</label>
                     <div className="space-y-1.5 text-xs text-slate-300">
@@ -874,7 +947,7 @@ function ClientPortal() {
                       name="appointment_date"
                       type="datetime-local"
                       required
-                      min={new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)}
+                      min={new Date(Date.now() + 60000 - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)}
                       value={appointmentFormData.appointment_date}
                       onChange={(e) => setAppointmentFormData({...appointmentFormData, appointment_date: e.target.value})}
                       className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-amber-500"

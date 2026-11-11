@@ -4,11 +4,25 @@ require_once __DIR__ . '/_layout.php';
 
 $user = staff_require_auth($pdo);
 
+$registeredClients = $pdo->query(
+    "SELECT c.client_id, c.fullname, c.email, c.phone, c.address
+     FROM clients c
+     INNER JOIN users u ON u.user_id = c.user_id
+     WHERE LOWER(TRIM(u.role)) = 'client'
+     ORDER BY c.fullname ASC, c.client_id ASC"
+)->fetchAll();
+
 $error = '';
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $caseNumber = trim((string) ($_POST['case_number'] ?? ''));
     $title = trim((string) ($_POST['title'] ?? ''));
     $clientName = trim((string) ($_POST['client_name'] ?? ''));
+    $registeredClientIdInput = is_string($_POST['registered_client_id'] ?? null)
+        ? trim($_POST['registered_client_id'])
+        : '';
+    $registeredClientId = $registeredClientIdInput === ''
+        ? null
+        : filter_var($registeredClientIdInput, FILTER_VALIDATE_INT);
     $clientEmail = trim((string) ($_POST['client_email'] ?? ''));
     $clientPhone = trim((string) ($_POST['client_phone'] ?? ''));
     $clientAddress = trim((string) ($_POST['client_address'] ?? ''));
@@ -28,6 +42,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $error = 'Enter a case title (up to 255 characters).';
     } elseif ($clientName === '' || strlen($clientName) > 150) {
         $error = 'Enter a client name (up to 150 characters).';
+    } elseif ($registeredClientId === false || ($registeredClientId !== null && $registeredClientId < 1)) {
+        $error = 'Select a valid registered Client account.';
     } elseif ($clientEmail !== '' && (strlen($clientEmail) > 150 || filter_var($clientEmail, FILTER_VALIDATE_EMAIL) === false)) {
         $error = 'Enter a valid client email address or leave it blank.';
     } elseif ($clientPhone !== '' && preg_match('/^[0-9]{1,11}$/D', $clientPhone) !== 1) {
@@ -52,22 +68,44 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         } else {
             try {
                 $pdo->beginTransaction();
-                $clientLookup = $pdo->prepare(
-                    "SELECT c.client_id
-                     FROM clients c
-                     INNER JOIN users u ON u.user_id = c.user_id
-                     WHERE LOWER(TRIM(u.role)) = 'client'
-                       AND LOWER(TRIM(c.fullname)) = LOWER(TRIM(:fullname))
-                     FOR UPDATE"
-                );
-                $clientLookup->execute(['fullname' => $clientName]);
-                $matchingClientIds = $clientLookup->fetchAll(PDO::FETCH_COLUMN);
+                if ($registeredClientId !== null) {
+                    $clientLookup = $pdo->prepare(
+                        "SELECT c.client_id, c.fullname
+                         FROM clients c
+                         INNER JOIN users u ON u.user_id = c.user_id
+                         WHERE c.client_id = :client_id
+                           AND LOWER(TRIM(u.role)) = 'client'
+                           AND LOWER(TRIM(c.fullname)) = LOWER(TRIM(:fullname))
+                         FOR UPDATE"
+                    );
+                    $clientLookup->execute([
+                        'client_id' => $registeredClientId,
+                        'fullname' => $clientName,
+                    ]);
+                    $registeredClient = $clientLookup->fetch();
 
-                if (count($matchingClientIds) > 1) {
-                    $pdo->rollBack();
-                    $error = 'More than one Client account has that name. Use a unique client name so the case is linked to the correct account.';
+                    if (!is_array($registeredClient)) {
+                        $pdo->rollBack();
+                        $error = 'Select a registered Client from the suggestions so the case is linked to the correct account.';
+                    } else {
+                        $clientId = (int) $registeredClient['client_id'];
+                    }
                 } else {
-                    if (count($matchingClientIds) === 1) {
+                    $clientLookup = $pdo->prepare(
+                        "SELECT c.client_id
+                         FROM clients c
+                         INNER JOIN users u ON u.user_id = c.user_id
+                         WHERE LOWER(TRIM(u.role)) = 'client'
+                           AND LOWER(TRIM(c.fullname)) = LOWER(TRIM(:fullname))
+                         FOR UPDATE"
+                    );
+                    $clientLookup->execute(['fullname' => $clientName]);
+                    $matchingClientIds = $clientLookup->fetchAll(PDO::FETCH_COLUMN);
+
+                    if (count($matchingClientIds) > 1) {
+                        $pdo->rollBack();
+                        $error = 'More than one Client account has that name. Select the correct account from the suggestions.';
+                    } elseif (count($matchingClientIds) === 1) {
                         $clientId = (int) $matchingClientIds[0];
                     } else {
                         $clientInsert = $pdo->prepare(
@@ -82,7 +120,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         ]);
                         $clientId = (int) $pdo->lastInsertId();
                     }
+                }
 
+                if ($error === '') {
                     $caseInsert = $pdo->prepare(
                         'INSERT INTO cases
                             (client_id, assigned_lawyer_name, case_number, title, description, status, filed_date)
@@ -99,7 +139,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         'filed_date' => $filedDate->format('Y-m-d'),
                     ]);
                     $pdo->commit();
-                    staff_redirect_with_flash('Case record saved successfully.');
+                    staff_redirect_with_flash('Case record saved successfully and submitted to the assigned Attorney for review.');
                 }
             } catch (PDOException $exception) {
                 if ($pdo->inTransaction()) {
@@ -116,6 +156,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 $statement = $pdo->query(
     'SELECT c.case_id, c.case_number, c.title, c.description, c.status, c.filed_date,
+            c.case_review_status, c.case_review_comment,
             cl.fullname AS client_name,
             COALESCE(NULLIF(c.assigned_lawyer_name, \'\'), u.username) AS lawyer_name
      FROM cases c
@@ -148,9 +189,27 @@ staff_layout_start('Case Management', $user, 'cases.php', staff_take_flash(), $e
             <label for="title" class="mb-1 block text-sm font-medium text-slate-200">Case Title <span class="text-amber-400">*</span></label>
             <input id="title" name="title" type="text" required maxlength="255" value="<?php echo staff_h($_POST['title'] ?? ''); ?>" class="<?php echo staff_input_class(); ?>">
         </div>
-        <div>
+        <div class="relative">
             <label for="client_name" class="mb-1 block text-sm font-medium text-slate-200">Client Name <span class="text-amber-400">*</span></label>
-            <input id="client_name" name="client_name" type="text" required maxlength="150" value="<?php echo staff_h($_POST['client_name'] ?? ''); ?>" class="<?php echo staff_input_class(); ?>">
+            <input id="registered_client_id" name="registered_client_id" type="hidden" value="<?php echo staff_h($_POST['registered_client_id'] ?? ''); ?>">
+            <input
+                id="client_name"
+                name="client_name"
+                type="text"
+                required
+                maxlength="150"
+                value="<?php echo staff_h($_POST['client_name'] ?? ''); ?>"
+                class="<?php echo staff_input_class(); ?>"
+                autocomplete="off"
+                role="combobox"
+                aria-autocomplete="list"
+                aria-expanded="false"
+                aria-controls="registered-client-suggestions"
+                aria-activedescendant="">
+            <div id="registered-client-dropdown" class="absolute left-0 right-0 top-full z-50 mt-2 hidden overflow-hidden rounded-xl border border-slate-700 bg-slate-900 shadow-2xl">
+                <ul id="registered-client-suggestions" class="max-h-60 overflow-y-auto py-1" role="listbox" aria-label="Registered Client accounts"></ul>
+                <p id="registered-client-status" class="hidden px-4 py-3 text-sm text-slate-400" role="status"></p>
+            </div>
             <p class="mt-1 text-xs text-slate-400">Use the registered Client account name to link this case to their Client Portal. If no account matches, a separate intake record is created.</p>
         </div>
         <div>
@@ -194,6 +253,13 @@ staff_layout_start('Case Management', $user, 'cases.php', staff_take_flash(), $e
 </dialog>
 
 <section class="<?php echo staff_panel_class(); ?>">
+    <div class="mb-5 flex flex-col gap-3 rounded-xl border border-amber-500/20 bg-amber-500/5 p-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+            <h2 class="font-semibold text-white">Attach case documents</h2>
+            <p class="mt-1 text-sm text-slate-400">After creating a case, upload its documents for Attorney review.</p>
+        </div>
+        <a href="documents.php" class="inline-flex shrink-0 items-center justify-center rounded-lg border border-amber-500/40 px-4 py-2 text-sm font-semibold text-amber-300 transition hover:bg-amber-500/10">Upload Document</a>
+    </div>
     <?php staff_panel_heading('Recent Cases'); ?>
     <div class="overflow-x-auto">
         <table class="w-full min-w-[900px] text-left text-sm text-slate-300">
@@ -204,12 +270,13 @@ staff_layout_start('Case Management', $user, 'cases.php', staff_take_flash(), $e
                     <th class="p-4">Client</th>
                     <th class="p-4">Assigned Lawyer</th>
                     <th class="p-4">Status</th>
+                    <th class="p-4">Attorney Review</th>
                     <th class="p-4">Filed Date</th>
                 </tr>
             </thead>
             <tbody class="divide-y divide-slate-800/60">
                 <?php if ($cases === []): ?>
-                    <?php staff_table_empty_row(6, 'No cases have been recorded.'); ?>
+                    <?php staff_table_empty_row(7, 'No cases have been recorded.'); ?>
                 <?php else: foreach ($cases as $case): ?>
                     <tr class="hover:bg-slate-800/40">
                         <td class="p-4 font-mono text-amber-300"><?php echo staff_h($case['case_number']); ?></td>
@@ -222,6 +289,14 @@ staff_layout_start('Case Management', $user, 'cases.php', staff_take_flash(), $e
                         <td class="p-4"><?php echo staff_h($case['client_name']); ?></td>
                         <td class="p-4"><?php echo staff_h($case['lawyer_name'] ?: 'Unassigned'); ?></td>
                         <td class="p-4"><?php echo staff_h($case['status']); ?></td>
+                        <td class="p-4">
+                            <span class="rounded-full px-2.5 py-1 text-xs <?php echo $case['case_review_status'] === 'Approved' ? 'bg-emerald-500/10 text-emerald-300' : ($case['case_review_status'] === 'Declined' ? 'bg-red-500/10 text-red-300' : 'bg-amber-500/10 text-amber-300'); ?>">
+                                <?php echo staff_h($case['case_review_status'] ?: 'Pending Review'); ?>
+                            </span>
+                            <?php if ($case['case_review_comment'] !== null && $case['case_review_comment'] !== ''): ?>
+                                <p class="mt-2 max-w-xs whitespace-pre-wrap text-xs text-slate-400"><?php echo staff_h($case['case_review_comment']); ?></p>
+                            <?php endif; ?>
+                        </td>
                         <td class="p-4"><?php echo staff_h($case['filed_date']); ?></td>
                     </tr>
                 <?php endforeach; endif; ?>
@@ -229,4 +304,139 @@ staff_layout_start('Case Management', $user, 'cases.php', staff_take_flash(), $e
         </table>
     </div>
 </section>
+<script>
+    (() => {
+        const clients = <?php echo json_encode($registeredClients, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?>;
+        const input = document.getElementById('client_name');
+        const selectedClientId = document.getElementById('registered_client_id');
+        const dropdown = document.getElementById('registered-client-dropdown');
+        const list = document.getElementById('registered-client-suggestions');
+        const status = document.getElementById('registered-client-status');
+        const emailInput = document.getElementById('client_email');
+        const phoneInput = document.getElementById('client_phone');
+        const addressInput = document.getElementById('client_address');
+        let activeIndex = -1;
+        let matches = [];
+
+        const closeSuggestions = () => {
+            dropdown.classList.add('hidden');
+            list.replaceChildren();
+            input.setAttribute('aria-expanded', 'false');
+            input.setAttribute('aria-activedescendant', '');
+            activeIndex = -1;
+            matches = [];
+        };
+
+        const setActiveOption = (index) => {
+            const options = Array.from(list.querySelectorAll('[role="option"]'));
+            if (options.length === 0) return;
+            activeIndex = (index + options.length) % options.length;
+            options.forEach((option, optionIndex) => {
+                const isActive = optionIndex === activeIndex;
+                option.setAttribute('aria-selected', String(isActive));
+                option.classList.toggle('bg-slate-800', isActive);
+                if (isActive) {
+                    input.setAttribute('aria-activedescendant', option.id);
+                    option.scrollIntoView({ block: 'nearest' });
+                }
+            });
+        };
+
+        const selectClient = (client) => {
+            input.value = client.fullname;
+            selectedClientId.value = String(client.client_id);
+            emailInput.value = client.email || '';
+            phoneInput.value = client.phone || '';
+            addressInput.value = client.address || '';
+            closeSuggestions();
+        };
+
+        const renderSuggestions = () => {
+            const query = input.value.trim().toLocaleLowerCase();
+            list.replaceChildren();
+            status.classList.add('hidden');
+            matches = query.length > 0
+                ? clients.filter((client) => (
+                    String(client.fullname).toLocaleLowerCase().includes(query)
+                    || String(client.email || '').toLocaleLowerCase().includes(query)
+                )).slice(0, 8)
+                : [];
+
+            if (query.length === 0) {
+                closeSuggestions();
+                return;
+            }
+
+            dropdown.classList.remove('hidden');
+            input.setAttribute('aria-expanded', 'true');
+            if (matches.length === 0) {
+                status.textContent = 'No registered Client accounts match. You can continue to create a separate intake record.';
+                status.classList.remove('hidden');
+                return;
+            }
+
+            matches.forEach((client, index) => {
+                const option = document.createElement('li');
+                option.id = `registered-client-option-${client.client_id}`;
+                option.setAttribute('role', 'option');
+                option.setAttribute('aria-selected', 'false');
+                option.className = 'cursor-pointer px-4 py-3 text-sm text-slate-200 transition hover:bg-slate-800 focus:bg-slate-800';
+
+                const name = document.createElement('span');
+                name.className = 'block font-medium text-white';
+                name.textContent = client.fullname;
+                option.append(name);
+
+                if (client.email) {
+                    const email = document.createElement('span');
+                    email.className = 'mt-1 block text-xs text-slate-400';
+                    email.textContent = client.email;
+                    option.append(email);
+                }
+
+                option.addEventListener('pointerdown', (event) => event.preventDefault());
+                option.addEventListener('click', () => selectClient(client));
+                list.append(option);
+                if (index === 0) setActiveOption(0);
+            });
+        };
+
+        input.addEventListener('input', () => {
+            if (selectedClientId.value !== '') {
+                emailInput.value = '';
+                phoneInput.value = '';
+                addressInput.value = '';
+            }
+            selectedClientId.value = '';
+            renderSuggestions();
+        });
+        input.addEventListener('focus', renderSuggestions);
+        input.addEventListener('keydown', (event) => {
+            if (event.key === 'ArrowDown' && matches.length > 0) {
+                event.preventDefault();
+                setActiveOption(activeIndex + 1);
+            } else if (event.key === 'ArrowUp' && matches.length > 0) {
+                event.preventDefault();
+                setActiveOption(activeIndex < 0 ? matches.length - 1 : activeIndex - 1);
+            } else if (event.key === 'Enter' && activeIndex >= 0 && matches[activeIndex]) {
+                event.preventDefault();
+                selectClient(matches[activeIndex]);
+            } else if (event.key === 'Escape') {
+                closeSuggestions();
+            }
+        });
+        document.addEventListener('pointerdown', (event) => {
+            if (!dropdown.contains(event.target) && event.target !== input) closeSuggestions();
+        });
+
+        const initialClient = clients.find((client) => String(client.client_id) === selectedClientId.value);
+        if (initialClient && initialClient.fullname === input.value) {
+            emailInput.value = initialClient.email || '';
+            phoneInput.value = initialClient.phone || '';
+            addressInput.value = initialClient.address || '';
+        } else {
+            selectedClientId.value = '';
+        }
+    })();
+</script>
 <?php staff_layout_end(); ?>

@@ -1,6 +1,7 @@
 <?php
 require_once __DIR__ . '/_bootstrap.php';
 require_once __DIR__ . '/_layout.php';
+require_once __DIR__ . '/../config/notifications.php';
 
 $user = staff_require_auth($pdo);
 $error = '';
@@ -46,6 +47,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
         if ($error === '') {
+            $pdo->beginTransaction();
             $insert = $pdo->prepare(
                 'INSERT INTO appointments (case_id, client_id, user_id, title, appointment_date, type, status)
                  VALUES (:case_id, :client_id, :user_id, :title, :appointment_date, :type, :status)'
@@ -59,6 +61,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'type' => $type,
                 'status' => 'Pending',
             ]);
+            $appointmentId = (int) $pdo->lastInsertId();
+            $clientUserStatement = $pdo->prepare('SELECT user_id FROM clients WHERE client_id = :client_id');
+            $clientUserStatement->execute(['client_id' => $clientId]);
+            $clientUserId = $clientUserStatement->fetchColumn();
+            if ($clientUserId !== false && $clientUserId !== null) {
+                create_portal_notification(
+                    $pdo,
+                    (int) $clientUserId,
+                    $appointmentId,
+                    'appointment_requested',
+                    'Appointment requested',
+                    $title . ' is scheduled as a pending request for ' . $appointmentDate->format('M j, Y g:i A') . '.'
+                );
+            }
+            $pdo->commit();
             staff_redirect_with_flash('Appointment saved as pending.');
         }
     }
@@ -139,7 +156,7 @@ staff_layout_start('Appointment & Hearing Scheduling', $user, 'appointments.php'
             </div>
             <div>
                 <label for="appointment_date" class="mb-1 block text-sm font-medium text-slate-200">Date &amp; Time <span class="text-amber-400">*</span></label>
-                <input id="appointment_date" name="appointment_date" type="datetime-local" required min="<?php echo staff_h(date('Y-m-d\TH:i')); ?>" value="<?php echo staff_h($_POST['appointment_date'] ?? ''); ?>" class="<?php echo staff_input_class(); ?>">
+                <input id="appointment_date" name="appointment_date" type="datetime-local" required min="<?php echo staff_h((new DateTime())->modify('+1 minute')->format('Y-m-d\TH:i')); ?>" value="<?php echo staff_h($_POST['appointment_date'] ?? ''); ?>" class="<?php echo staff_input_class(); ?>">
             </div>
             <div class="flex items-end">
                 <button type="submit" class="rounded-lg bg-gradient-to-r from-amber-600 to-amber-500 px-5 py-2.5 text-sm font-semibold text-slate-950 transition hover:from-amber-500 hover:to-amber-400">Save Pending Appointment</button>
@@ -150,11 +167,12 @@ staff_layout_start('Appointment & Hearing Scheduling', $user, 'appointments.php'
 </dialog>
 
 <section class="<?php echo staff_panel_class(); ?>">
-    <?php staff_panel_heading('Upcoming Appointments'); ?>
+    <?php staff_panel_heading('Appointment Requests & Schedule'); ?>
+    <p class="mb-4 text-sm text-slate-400">Appointments created by Staff or requested by Clients start as Pending. An Attorney confirms the final date and time; confirmed appointments will appear here and in the Client portal.</p>
     <div class="overflow-x-auto">
         <table class="w-full min-w-[900px] text-left text-sm text-slate-300">
             <thead class="bg-slate-950/60 text-xs uppercase tracking-wider text-amber-400/80">
-                <tr><th class="p-4">Meeting Title</th><th class="p-4">Client</th><th class="p-4">Case</th><th class="p-4">Date &amp; Time</th><th class="p-4">Type</th><th class="p-4">Status</th><th class="p-4">Created By</th></tr>
+                <tr><th class="p-4">Meeting Title</th><th class="p-4">Client</th><th class="p-4">Case</th><th class="p-4">Date &amp; Time</th><th class="p-4">Type</th><th class="p-4">Status</th><th class="p-4">Request Source</th></tr>
             </thead>
             <tbody class="divide-y divide-slate-800/60">
                 <?php if ($appointments === []): ?>
